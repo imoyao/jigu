@@ -12,7 +12,7 @@
   --muted: #9ca3af;
   --primary: #ff2436; /* 核心红（主色） */
   --accent: #e61e2d; /* 深一级红（原蓝色 accent） */
-  --success: #e67e22; /* 橙红（替代绿色 success） */
+  --success: #34d399; /* 橙红（替代绿色 success） */
   --danger: #f87171; /* 浅红（保持危险色层级） */
   --border: #1f2937;
   --table-pinned-header-bg: #2a394b;
@@ -34,7 +34,7 @@
   /* 图表色：全替换为红色系渐变（红→橙红→深红→玫红→橘红） */
   --chart-1: #ff2436; 
   --chart-2: #e61e2d;
-  --chart-3: #e67e22;
+  --chart-3: #34d399;
   --chart-4: #f472b6;
   --chart-5: #fbbf24;
   /* 侧边栏：红色系主调 */
@@ -56,7 +56,7 @@
   --muted: #475569;
   --primary: #ff2436; /* 核心红（替换原蓝色） */
   --accent: #e61e2d; /* 深一级红（替换原蓝色 accent） */
-  --success: #e67e22; /* 橙红（替代绿色 success） */
+  --success: #059669; /* 橙红（替代绿色 success） */
   --danger: #dc2626; /* 深红（危险色） */
   --border: #e2e8f0;
   --table-pinned-header-bg: #e2e8f0;
@@ -77,7 +77,7 @@
   /* 图表色：亮色模式下红色系渐变 */
   --chart-1: #ff2436;
   --chart-2: #e61e2d;
-  --chart-3: #e67e22;
+  --chart-3: #059669;
   --chart-4: #db2777;
   --chart-5: #ca8a04;
   /* 侧边栏：亮色模式红色系 */
