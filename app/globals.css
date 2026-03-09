@@ -413,7 +413,7 @@ body::before {
 }
 
 [data-theme="light"] .chip.active {
-  background: linear-gradient(180deg, #0ea5e9, #0891b2);
+  background: linear-gradient(180deg, #ff2436, #e61e2d);
   color: #fff;
   border-color: transparent;
 }
