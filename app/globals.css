@@ -212,7 +212,7 @@ body::before {
 /* 亮色主题：按钮样式适配 */
 [data-theme="light"] .button {
   border-color: rgba(8, 145, 178, 0.4);
-  background: linear-gradient(180deg, #0ea5e9, #0891b2);
+  background: linear-gradient(180deg, #ff2436, #e61e2d);
   color: #fff;
   box-shadow: 0 2px 8px rgba(8, 145, 178, 0.2);
 }
