@@ -1,6 +1,7 @@
 import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 import AnalyticsGate from './components/AnalyticsGate';
+import { Analytics } from "@vercel/analytics/next"
 import packageJson from '../package.json';
 
 export const metadata = {
