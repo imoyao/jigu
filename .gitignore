@@ -81,7 +81,7 @@ fabric.properties
 /.next/
 .vscode/
 
-.env.local
+# .env.local
 .DS_Store
 .idea/*
 .husky/_/
