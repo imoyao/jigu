@@ -566,11 +566,20 @@ export default function PcFundTable({
         header: '最新净值',
         size: 100,
         minSize: 80,
-        cell: (info) => (
-          <FitText style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10}>
-            {info.getValue() ?? '—'}
-          </FitText>
-        ),
+        cell: (info) => {
+          const original = info.row.original || {};
+          const date = original.latestNavDate ?? '-';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
+              <FitText style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {info.getValue() ?? '—'}
+              </FitText>
+              <span className="muted" style={{ fontSize: '11px' }}>
+                {date}
+              </span>
+            </div>
+          );
+        },
         meta: {
           align: 'right',
           cellClassName: 'value-cell',
@@ -581,11 +590,20 @@ export default function PcFundTable({
         header: '估算净值',
         size: 100,
         minSize: 80,
-        cell: (info) => (
-          <FitText style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10}>
-            {info.getValue() ?? '—'}
-          </FitText>
-        ),
+        cell: (info) => {
+          const original = info.row.original || {};
+          const date = original.estimateNavDate ?? '-';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
+              <FitText style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {info.getValue() ?? '—'}
+              </FitText>
+              <span className="muted" style={{ fontSize: '11px' }}>
+                {date}
+              </span>
+            </div>
+          );
+        },
         meta: {
           align: 'right',
           cellClassName: 'value-cell',

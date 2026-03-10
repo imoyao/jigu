@@ -1,7 +1,9 @@
 import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 import AnalyticsGate from './components/AnalyticsGate';
-import { Analytics } from "@vercel/analytics/next"
+import { Analytics } from "@vercel/analytics/next";
+import PwaRegister from './components/PwaRegister';
+import ThemeColorSync from './components/ThemeColorSync';
 import packageJson from '../package.json';
 
 export const metadata = {
@@ -20,6 +22,9 @@ export default function RootLayout({ children }) {
       <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
       <link rel="apple-touch-icon" href="/Icon-60@3x.png?v=1"/>
       <link rel="apple-touch-icon" sizes="180x180" href="/Icon-60@3x.png?v=1"/>
+      <link rel="manifest" href="/manifest.webmanifest" />
+      {/* 初始为暗色；ThemeColorSync 会按 data-theme 同步为亮/暗 */}
+      <meta name="theme-color" content="#0f172a" />
       <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
       {/* 尽早设置 data-theme，减少首屏主题闪烁；与 suppressHydrationWarning 配合避免服务端/客户端 html 属性不一致报错 */}
       <script
@@ -29,6 +34,8 @@ export default function RootLayout({ children }) {
       />
     </head>
     <body>
+      <ThemeColorSync />
+      <PwaRegister />
       <AnalyticsGate GA_ID={GA_ID} />
       {children}
       <Toaster />

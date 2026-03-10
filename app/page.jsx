@@ -660,7 +660,9 @@ export default function HomePage() {
           isUpdated: f.jzrq === todayStr,
           hasDca: dcaPlans[f.code]?.enabled === true,
           latestNav,
+          latestNavDate: yesterdayDate,
           estimateNav,
+          estimateNavDate: estimateTime,
           yesterdayChangePercent,
           yesterdayChangeValue,
           yesterdayDate,
@@ -1428,7 +1430,6 @@ export default function HomePage() {
       const fields = Array.from(new Set([
         'jzrq',
         'dwjz',
-        'gsz',
         ...(Array.isArray(extraFields) ? extraFields : [])
       ]));
       const items = list.map((item) => {

@@ -2212,6 +2212,13 @@ input[type="number"] {
   color: #b45309;
 }
 
+/* 亮色主题：TradeModal */
+[data-theme="light"] .trade-pending-alert {
+  background: rgba(217, 119, 6, 0.12);
+  border-color: rgba(217, 119, 6, 0.35);
+  color: #b45309;
+}
+
 [data-theme="light"] .trade-modal .trade-pending-header {
   background: rgba(255, 255, 255, 0.98);
   border-bottom-color: var(--border);
@@ -3321,31 +3328,31 @@ input[type="number"] {
   --card-foreground: #f8fafc;
   --popover: #0f172a;
   --popover-foreground: #f8fafc;
-  --primary: #22d3ee;
+  --primary: #ff2436;
   --primary-foreground: #0f172a;
   --secondary: #1e293b;
   --secondary-foreground: #f8fafc;
   --muted: #1e293b;
   --muted-foreground: #94a3af;
-  --accent: #60a5fa;
+  --accent: #e61e2d;
   --accent-foreground: #f8fafc;
   --destructive: #f87171;
   --border: #1f2937;
-  --input: #1e293b;
-  --ring: #22d3ee;
-  --chart-1: #22d3ee;
+  --input: #0b1220;
+  --ring: #ff2436;
+  --chart-1: #ff2436;
   --chart-2: #60a5fa;
   --chart-3: #34d399;
   --chart-4: #f472b6;
   --chart-5: #fbbf24;
   --sidebar: #0f172a;
   --sidebar-foreground: #f8fafc;
-  --sidebar-primary: #22d3ee;
+  --sidebar-primary: #ff2436;
   --sidebar-primary-foreground: #0f172a;
   --sidebar-accent: #1e293b;
   --sidebar-accent-foreground: #f8fafc;
   --sidebar-border: #1f2937;
-  --sidebar-ring: #22d3ee;
+  --sidebar-ring: #ff2436;
 }
 
 @layer base {

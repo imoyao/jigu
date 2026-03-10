@@ -662,25 +662,41 @@ export default function MobileFundTable({
       {
         accessorKey: 'latestNav',
         header: '最新净值',
-        cell: (info) => (
-          <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
-            <FitText maxFontSize={14} minFontSize={10}>
-              {info.getValue() ?? '—'}
-            </FitText>
-          </span>
-        ),
+        cell: (info) => {
+          const original = info.row.original || {};
+          const date = original.latestNavDate ?? '-';
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
+              <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
+                <FitText maxFontSize={14} minFontSize={10}>
+                  {info.getValue() ?? '—'}
+                </FitText>
+              </span>
+              <span className="muted" style={{ fontSize: '10px' }}>{date}</span>
+            </div>
+          );
+        },
         meta: { align: 'right', cellClassName: 'value-cell', width: columnWidthMap.latestNav },
       },
       {
         accessorKey: 'estimateNav',
         header: '估算净值',
-        cell: (info) => (
-          <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
-            <FitText maxFontSize={14} minFontSize={10}>
-              {info.getValue() ?? '—'}
-            </FitText>
-          </span>
-        ),
+        cell: (info) => {
+          const original = info.row.original || {};
+          const date = original.estimateNavDate ?? '-';
+          const displayDate = typeof date === 'string' && date.length > 5 ? date.slice(5) : date;
+
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
+              <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
+                <FitText maxFontSize={14} minFontSize={10}>
+                  {info.getValue() ?? '—'}
+                </FitText>
+              </span>
+              <span className="muted" style={{ fontSize: '10px' }}>{displayDate}</span>
+            </div>
+          );
+        },
         meta: { align: 'right', cellClassName: 'value-cell', width: columnWidthMap.estimateNav },
       },
       {

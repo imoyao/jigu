@@ -5,6 +5,16 @@
 1. [https://hzm0321.github.io/real-time-fund/](https://hzm0321.github.io/real-time-fund/)
 2. [https://fund.cc.cd/](https://fund.cc.cd/) （加速国内访问）
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=hzm0321%2Freal-time-fund&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&legend=top-left" />
+ </picture>
+</a>
+
 ## ✨ 特性
 
 - **实时估值**：通过输入基金编号，实时获取并展示基金的单位净值、估值净值及实时涨跌幅。
@@ -79,7 +89,11 @@
     官方验证码位数默认为8位，可自行修改。常见一般为6位。
    在 Supabase控制台 → Authentication → Sign In / Providers → Auth Providers → email → Minimum password length  和 Email OTP Length 都改为6位。
 
-5. 目前项目用到的 sql 语句，查看项目 supabase.sql 文件。
+5. 关闭确认邮件
+
+    在 Supabase控制台 → Authentication → Sign In / Providers → Auth Providers → email 中，关闭 **Confirm email** 选项。这样用户注册后就不需要再去邮箱点击确认链接了，直接使用验证码登录即可。
+
+6. 目前项目用到的 sql 语句，查看项目 supabase.sql 文件。
 
 更多 Supabase 相关内容查阅官方文档。
 
@@ -126,9 +140,9 @@ docker compose up -d
 
 ## 💬 开发者交流群
 
-欢迎基金实时开发者加入微信群聊讨论开发与协作：  
+欢迎基金实时开发者加入微信群聊讨论开发与协作：
 
-微信开发群人数已满200，如需加入请加微信号 `hzm1998hzm` 。加v备注：`基估宝开发`，邀请入群。
+<img src="./doc/weChatGroupDevelop.jpg" width="300">
 
 ## 📝 免责声明
 
