@@ -25,6 +25,8 @@
   --popover-foreground: #e5e7eb;
   --primary-foreground: #0f172a; /* 主色文字（深色背景） */
   --secondary: #1f2937;
+  --primary-foreground: #0f172a;
+  --secondary: #0b1220;
   --secondary-foreground: #e5e7eb;
   --muted-foreground: #9ca3af;
   --accent-foreground: #e5e7eb;
@@ -33,7 +35,7 @@
   --ring: #ff2436; /* 焦点环（主红） */
   /* 图表色：全替换为红色系渐变（红→橙红→深红→玫红→橘红） */
   --chart-1: #ff2436; 
-  --chart-2: #e61e2d;
+  --chart-2: #60a5fa;
   --chart-3: #34d399;
   --chart-4: #f472b6;
   --chart-5: #fbbf24;
@@ -76,7 +78,7 @@
   --ring: #ff2436; /* 焦点环（主红） */
   /* 图表色：亮色模式下红色系渐变 */
   --chart-1: #ff2436;
-  --chart-2: #e61e2d;
+  --chart-2: #2563eb;
   --chart-3: #059669;
   --chart-4: #db2777;
   --chart-5: #ca8a04;
