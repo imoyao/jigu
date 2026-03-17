@@ -882,7 +882,7 @@ input[type="number"] {
   padding: 0 16px;
   border-radius: 12px;
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, #0ea5e9, #22d3ee);
+  background: linear-gradient(180deg, #a40011, #C20C0C);
   color: #05263b;
   font-weight: 600;
   cursor: pointer;
@@ -2698,7 +2698,7 @@ input[type="number"] {
   transition: border-color 200ms ease, transform 150ms ease;
 }
 .chip:hover { transform: translateY(-1px); border-color: var(--accent); }
-.chip.active { background: linear-gradient(180deg, #0ea5e9, #22d3ee); color: #05263b; border-color: transparent; }
+.chip.active { background: linear-gradient(180deg, #a40011, #C20C0C); color: #05263b; border-color: transparent; }
 
 @keyframes spin {
   from { transform: rotate(0deg); }
