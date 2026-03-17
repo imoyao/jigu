@@ -10,8 +10,8 @@
   --card: #111827;
   --text: #e5e7eb;
   --muted: #9ca3af;
-  --primary: #ff2436; /* 核心红（主色） */
-  --accent: #e61e2d; /* 深一级红（原蓝色 accent） */
+  --primary: #C20C0C; /* 核心红（主色） */
+  --accent: #a40011; /* 深一级红（原蓝色 accent） */
   --success: #34d399; /* 橙红（替代绿色 success） */
   --danger: #f87171; /* 浅红（保持危险色层级） */
   --border: #1f2937;
@@ -33,9 +33,9 @@
   --accent-foreground: #e5e7eb;
   --destructive: #f87171;
   --input: #1f2937;
-  --ring: #ff2436; /* 焦点环（主红） */
+  --ring: #C20C0C; /* 焦点环（主红） */
   /* 图表色：全替换为红色系渐变（红→橙红→深红→玫红→橘红） */
-  --chart-1: #ff2436; 
+  --chart-1: #C20C0C; 
   --chart-2: #60a5fa;
   --chart-3: #34d399;
   --chart-4: #f472b6;
@@ -43,12 +43,12 @@
   /* 侧边栏：红色系主调 */
   --sidebar: #111827;
   --sidebar-foreground: #e5e7eb;
-  --sidebar-primary: #ff2436;
+  --sidebar-primary: #C20C0C;
   --sidebar-primary-foreground: #0f172a;
   --sidebar-accent: #1f2937;
   --sidebar-accent-foreground: #e5e7eb;
   --sidebar-border: #1f2937;
-  --sidebar-ring: #ff2436;
+  --sidebar-ring: #C20C0C;
 }
 
 /* 亮色主题：红色系主调（保留渐变层次，无蓝色） */
@@ -57,8 +57,8 @@
   --card: #ffffff;
   --text: #0f172a;
   --muted: #475569;
-  --primary: #ff2436; /* 核心红（替换原蓝色） */
-  --accent: #e61e2d; /* 深一级红（替换原蓝色 accent） */
+  --primary: #C20C0C; /* 核心红（替换原蓝色） */
+  --accent: #a40011; /* 深一级红（替换原蓝色 accent） */
   --success: #059669; /* 橙红（替代绿色 success） */
   --danger: #dc2626; /* 深红（危险色） */
   --border: #e2e8f0;
@@ -77,9 +77,9 @@
   --accent-foreground: #ffffff;
   --destructive: #dc2626;
   --input: #e2e8f0;
-  --ring: #ff2436; /* 焦点环（主红） */
+  --ring: #C20C0C; /* 焦点环（主红） */
   /* 图表色：亮色模式下红色系渐变 */
-  --chart-1: #ff2436;
+  --chart-1: #C20C0C;
   --chart-2: #2563eb;
   --chart-3: #059669;
   --chart-4: #db2777;
@@ -87,12 +87,12 @@
   /* 侧边栏：亮色模式红色系 */
   --sidebar: #f8fafc;
   --sidebar-foreground: #0f172a;
-  --sidebar-primary: #ff2436;
+  --sidebar-primary: #C20C0C;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #f1f5f9;
   --sidebar-accent-foreground: #0f172a;
   --sidebar-border: #e2e8f0;
-  --sidebar-ring: #ff2436;
+  --sidebar-ring: #C20C0C;
 }
 
 * {
@@ -225,7 +225,7 @@ body::before {
 /* 亮色主题：按钮样式适配 */
 [data-theme="light"] .button {
   border-color: rgba(8, 145, 178, 0.4);
-  background: linear-gradient(180deg, #ff2436, #e61e2d);
+  background: linear-gradient(180deg, #C20C0C, #a40011);
   color: #fff;
   box-shadow: 0 2px 8px rgba(8, 145, 178, 0.2);
 }
@@ -426,7 +426,7 @@ body::before {
 }
 
 [data-theme="light"] .chip.active {
-  background: linear-gradient(180deg, #ff2436, #e61e2d);
+  background: linear-gradient(180deg, #C20C0C, #a40011);
   color: #fff;
   border-color: transparent;
 }
@@ -3462,31 +3462,31 @@ input[type="number"] {
   --card-foreground: #f8fafc;
   --popover: #0f172a;
   --popover-foreground: #f8fafc;
-  --primary: #ff2436;
+  --primary: #C20C0C;
   --primary-foreground: #0f172a;
   --secondary: #1e293b;
   --secondary-foreground: #f8fafc;
   --muted: #1e293b;
   --muted-foreground: #94a3af;
-  --accent: #e61e2d;
+  --accent: #a40011;
   --accent-foreground: #f8fafc;
   --destructive: #f87171;
   --border: #1f2937;
   --input: #0b1220;
-  --ring: #ff2436;
-  --chart-1: #ff2436;
+  --ring: #C20C0C;
+  --chart-1: #C20C0C;
   --chart-2: #60a5fa;
   --chart-3: #34d399;
   --chart-4: #f472b6;
   --chart-5: #fbbf24;
   --sidebar: #0f172a;
   --sidebar-foreground: #f8fafc;
-  --sidebar-primary: #ff2436;
+  --sidebar-primary: #C20C0C;
   --sidebar-primary-foreground: #0f172a;
   --sidebar-accent: #1e293b;
   --sidebar-accent-foreground: #f8fafc;
   --sidebar-border: #1f2937;
-  --sidebar-ring: #ff2436;
+  --sidebar-ring: #C20C0C;
 }
 
 @layer base {
