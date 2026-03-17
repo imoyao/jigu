@@ -24,17 +24,10 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { throttle } from 'lodash';
-import {
-  Drawer,
-  DrawerClose,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from '@/components/ui/drawer';
 import FitText from './FitText';
-import FundCard from './FundCard';
+import MobileFundCardDrawer from './MobileFundCardDrawer';
 import MobileSettingModal from './MobileSettingModal';
-import { CloseIcon, DragIcon, ExitIcon, SettingsIcon, SortIcon, StarIcon } from './Icons';
+import { DragIcon, ExitIcon, SettingsIcon, SortIcon, StarIcon } from './Icons';
 
 const MOBILE_NON_FROZEN_COLUMN_IDS = [
   'yesterdayChangePercent',
@@ -108,6 +101,7 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {string} [props.sortBy] - 排序方式，'default' 时长按行触发拖拽排序
  * @param {(oldIndex: number, newIndex: number) => void} [props.onReorder] - 拖拽排序回调
  * @param {(row: any) => Object} [props.getFundCardProps] - 给定行返回 FundCard 的 props；传入后点击基金名称将用底部弹框展示卡片视图
+ * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
  */
 export default function MobileFundTable({
   data = [],
@@ -126,6 +120,7 @@ export default function MobileFundTable({
   getFundCardProps,
   blockDrawerClose = false,
   closeDrawerRef,
+  masked = false,
 }) {
   const [isNameSortMode, setIsNameSortMode] = useState(false);
 
@@ -559,7 +554,7 @@ export default function MobileFundTable({
                 }
               }}
             >
-              {holdingAmountDisplay}
+              {masked ? <span className="mask-text">******</span> : holdingAmountDisplay}
               {hasDca && <span className="dca-indicator">定</span>}
               {isUpdated && <span className="updated-indicator">✓</span>}
             </span>
@@ -665,6 +660,7 @@ export default function MobileFundTable({
         cell: (info) => {
           const original = info.row.original || {};
           const date = original.latestNavDate ?? '-';
+          const displayDate = typeof date === 'string' && date.length > 5 ? date.slice(5) : date;
           return (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
               <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
@@ -672,7 +668,7 @@ export default function MobileFundTable({
                   {info.getValue() ?? '—'}
                 </FitText>
               </span>
-              <span className="muted" style={{ fontSize: '10px' }}>{date}</span>
+              <span className="muted" style={{ fontSize: '10px' }}>{displayDate}</span>
             </div>
           );
         },
@@ -685,15 +681,19 @@ export default function MobileFundTable({
           const original = info.row.original || {};
           const date = original.estimateNavDate ?? '-';
           const displayDate = typeof date === 'string' && date.length > 5 ? date.slice(5) : date;
+          const estimateNav = info.getValue();
+          const hasEstimateNav = estimateNav != null && estimateNav !== '—';
 
           return (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
               <span style={{ display: 'block', width: '100%', fontWeight: 700 }}>
                 <FitText maxFontSize={14} minFontSize={10}>
-                  {info.getValue() ?? '—'}
+                  {estimateNav ?? '—'}
                 </FitText>
               </span>
-              <span className="muted" style={{ fontSize: '10px' }}>{displayDate}</span>
+              {hasEstimateNav && displayDate && displayDate !== '-' ? (
+                <span className="muted" style={{ fontSize: '10px' }}>{displayDate}</span>
+              ) : null}
             </div>
           );
         },
@@ -706,13 +706,14 @@ export default function MobileFundTable({
           const original = info.row.original || {};
           const value = original.yesterdayChangeValue;
           const date = original.yesterdayDate ?? '-';
+          const displayDate = typeof date === 'string' && date.length > 5 ? date.slice(5) : date;
           const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
           return (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
               <span className={cls} style={{ fontWeight: 700 }}>
                 {info.getValue() ?? '—'}
               </span>
-              <span className="muted" style={{ fontSize: '10px' }}>{date}</span>
+              <span className="muted" style={{ fontSize: '10px' }}>{displayDate}</span>
             </div>
           );
         },
@@ -728,12 +729,16 @@ export default function MobileFundTable({
           const time = original.estimateTime ?? '-';
           const displayTime = typeof time === 'string' && time.length > 5 ? time.slice(5) : time;
           const cls = isMuted ? 'muted' : value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = info.getValue();
+          const hasText = text != null && text !== '—';
           return (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0 }}>
               <span className={cls} style={{ fontWeight: 700 }}>
-                {info.getValue() ?? '—'}
+                {text ?? '—'}
               </span>
-              <span className="muted" style={{ fontSize: '10px' }}>{displayTime}</span>
+              {hasText && displayTime && displayTime !== '-' ? (
+                <span className="muted" style={{ fontSize: '10px' }}>{displayTime}</span>
+              ) : null}
             </div>
           );
         },
@@ -754,10 +759,10 @@ export default function MobileFundTable({
             <div style={{ width: '100%' }}>
               <span className={cls} style={{ display: 'block', width: '100%', fontWeight: 700 }}>
                 <FitText maxFontSize={14} minFontSize={10}>
-                  {amountStr}
+                  {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
                 </FitText>
               </span>
-              {percentStr ? (
+              {hasProfit && percentStr && !masked ? (
                 <span className={`${cls} estimate-profit-percent`} style={{ display: 'block', width: '100%', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
                   <FitText maxFontSize={11} minFontSize={9}>
                     {percentStr}
@@ -784,10 +789,10 @@ export default function MobileFundTable({
             <div style={{ width: '100%' }}>
               <span className={cls} style={{ display: 'block', width: '100%', fontWeight: 700 }}>
                 <FitText maxFontSize={14} minFontSize={10}>
-                  {amountStr}
+                  {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
                 </FitText>
               </span>
-              {percentStr && !isUpdated ? (
+              {percentStr && !isUpdated && !masked ? (
                 <span className={`${cls} today-profit-percent`} style={{ display: 'block', width: '100%', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
                   <FitText maxFontSize={11} minFontSize={9}>
                     {percentStr}
@@ -813,10 +818,10 @@ export default function MobileFundTable({
             <div style={{ width: '100%' }}>
               <span className={cls} style={{ display: 'block', width: '100%', fontWeight: 700 }}>
                 <FitText maxFontSize={14} minFontSize={10}>
-                  {amountStr}
+                  {masked && hasTotal ? <span className="mask-text">******</span> : amountStr}
                 </FitText>
               </span>
-              {percentStr ? (
+              {percentStr && !masked ? (
                 <span className={`${cls} holding-profit-percent`} style={{ display: 'block', width: '100%', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
                   <FitText maxFontSize={11} minFontSize={9}>
                     {percentStr}
@@ -1008,7 +1013,7 @@ export default function MobileFundTable({
                 strategy={verticalListSortingStrategy}
               >
                 <AnimatePresence mode="popLayout">
-                  {table.getRowModel().rows.map((row) => (
+                  {table.getRowModel().rows.map((row, index) => (
                     <SortableRow
                       key={row.original.code || row.id}
                       row={row}
@@ -1020,7 +1025,7 @@ export default function MobileFundTable({
                           ref={sortBy === 'default' && !isNameSortMode ? setActivatorNodeRef : undefined}
                           className="table-row"
                           style={{
-                            background: 'var(--bg)',
+                            background: index % 2 === 0 ? 'var(--bg)' : 'var(--table-row-alt-bg)',
                             position: 'relative',
                             zIndex: 1,
                             ...(mobileGridLayout.gridTemplateColumns ? { gridTemplateColumns: mobileGridLayout.gridTemplateColumns } : {}),
@@ -1034,11 +1039,19 @@ export default function MobileFundTable({
                             const alignClass = getAlignClass(columnId);
                             const cellClassName = cell.column.columnDef.meta?.cellClassName || '';
                             const isLastColumn = cellIndex === row.getVisibleCells().length - 1;
+                            const style = isLastColumn ? {paddingRight: LAST_COLUMN_EXTRA} : {};
+                            if (cellIndex  === 0) {
+                              if (index % 2 !== 0) {
+                                style.background = 'var(--table-row-alt-bg)';
+                              }else {
+                                style.background = 'var(--bg)';
+                              }
+                            }
                             return (
                               <div
                                 key={cell.id}
                                 className={`table-cell ${alignClass} ${cellClassName} ${pinClass}`}
-                                style={isLastColumn ? { paddingRight: LAST_COLUMN_EXTRA } : undefined}
+                                style={style}
                               >
                                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
                               </div>
@@ -1080,51 +1093,14 @@ export default function MobileFundTable({
           />
         )}
 
-        <Drawer
+        <MobileFundCardDrawer
           open={!!(cardSheetRow && getFundCardProps)}
-          onOpenChange={(open) => {
-            if (!open) {
-              if (ignoreNextDrawerCloseRef.current) {
-                ignoreNextDrawerCloseRef.current = false;
-                return;
-              }
-              if (!blockDrawerClose) setCardSheetRow(null);
-            }
-          }}
-        >
-          <DrawerContent
-            className="h-[77vh] max-h-[88vh] mt-0 flex flex-col"
-            onPointerDownOutside={(e) => {
-              if (blockDrawerClose) return;
-              if (e?.target?.closest?.('[data-slot="dialog-content"], [role="dialog"]')) {
-                ignoreNextDrawerCloseRef.current = true;
-                return;
-              }
-              setCardSheetRow(null);
-            }}
-          >
-            <DrawerHeader className="flex-shrink-0 flex flex-row items-center justify-between gap-2 space-y-0 px-5 pb-4 pt-2 text-left">
-              <DrawerTitle className="text-base font-semibold text-[var(--text)]">
-                基金详情
-              </DrawerTitle>
-              <DrawerClose
-                className="icon-button border-none bg-transparent p-1"
-                title="关闭"
-                style={{ borderColor: 'transparent', backgroundColor: 'transparent' }}
-              >
-                <CloseIcon width="20" height="20" />
-              </DrawerClose>
-            </DrawerHeader>
-            <div
-              className="flex-1 min-h-0 overflow-y-auto px-5 pb-8 pt-0"
-              style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}
-            >
-              {cardSheetRow && getFundCardProps ? (
-                <FundCard {...getFundCardProps(cardSheetRow)} />
-              ) : null}
-            </div>
-          </DrawerContent>
-        </Drawer>
+          onOpenChange={(open) => { if (!open) setCardSheetRow(null); }}
+          blockDrawerClose={blockDrawerClose}
+          ignoreNextDrawerCloseRef={ignoreNextDrawerCloseRef}
+          cardSheetRow={cardSheetRow}
+          getFundCardProps={getFundCardProps}
+        />
 
         {!onlyShowHeader && showPortalHeader && ReactDOM.createPortal(renderContent(true), document.body)}
       </div>

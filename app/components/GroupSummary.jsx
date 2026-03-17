@@ -56,9 +56,11 @@ export default function GroupSummary({
   groupName,
   getProfit,
   stickyTop,
+  masked,
+  onToggleMasked,
 }) {
   const [showPercent, setShowPercent] = useState(true);
-  const [isMasked, setIsMasked] = useState(false);
+  const [isMasked, setIsMasked] = useState(masked ?? false);
   const [isSticky, setIsSticky] = useState(false);
   const rowRef = useRef(null);
   const [assetSize, setAssetSize] = useState(24);
@@ -73,6 +75,31 @@ export default function GroupSummary({
       return () => window.removeEventListener('resize', onR);
     }
   }, []);
+
+  // 根据窗口宽度设置基础字号，保证小屏数字不会撑破布局
+  useEffect(() => {
+    if (!winW) return;
+
+    if (winW <= 360) {
+      setAssetSize(18);
+      setMetricSize(14);
+    } else if (winW <= 414) {
+      setAssetSize(22);
+      setMetricSize(16);
+    } else if (winW <= 768) {
+      setAssetSize(24);
+      setMetricSize(18);
+    } else {
+      setAssetSize(26);
+      setMetricSize(20);
+    }
+  }, [winW]);
+
+  useEffect(() => {
+    if (typeof masked === 'boolean') {
+      setIsMasked(masked);
+    }
+  }, [masked]);
 
   const summary = useMemo(() => {
     let totalAsset = 0;
@@ -90,7 +117,8 @@ export default function GroupSummary({
         hasHolding = true;
         totalAsset += profit.amount;
         if (profit.profitToday != null) {
-          totalProfitToday += Math.round(profit.profitToday * 100) / 100;
+          // 先累加原始当日收益，最后统一做一次四舍五入，避免逐笔四舍五入造成的总计误差
+          totalProfitToday += profit.profitToday;
           hasAnyTodayData = true;
         }
         if (profit.profitTotal !== null) {
@@ -102,11 +130,14 @@ export default function GroupSummary({
       }
     });
 
+    // 将当日收益总和四舍五入到两位小数，和卡片展示保持一致
+    const roundedTotalProfitToday = Math.round(totalProfitToday * 100) / 100;
+
     const returnRate = totalCost > 0 ? (totalHoldingReturn / totalCost) * 100 : 0;
 
     return {
       totalAsset,
-      totalProfitToday,
+      totalProfitToday: roundedTotalProfitToday,
       totalHoldingReturn,
       hasHolding,
       returnRate,
@@ -185,7 +216,13 @@ export default function GroupSummary({
               </div>
               <button
                 className="fav-button"
-                onClick={() => setIsMasked((value) => !value)}
+                onClick={() => {
+                  if (onToggleMasked) {
+                    onToggleMasked();
+                  } else {
+                    setIsMasked((value) => !value);
+                  }
+                }}
                 aria-label={isMasked ? '显示资产' : '隐藏资产'}
                 style={{
                   margin: 0,
@@ -211,6 +248,7 @@ export default function GroupSummary({
               <span style={{ fontSize: '16px', marginRight: 2 }}>¥</span>
               {isMasked ? (
                 <span
+                  className="mask-text"
                   style={{ fontSize: assetSize, position: 'relative', top: 4 }}
                 >
                   ******
@@ -245,7 +283,9 @@ export default function GroupSummary({
                 }}
               >
                 {isMasked ? (
-                  <span style={{ fontSize: metricSize }}>******</span>
+                  <span className="mask-text" style={{ fontSize: metricSize }}>
+                    ******
+                  </span>
                 ) : summary.hasAnyTodayData ? (
                   <>
                     <span style={{ marginRight: 1 }}>
@@ -298,7 +338,9 @@ export default function GroupSummary({
                 title="点击切换金额/百分比"
               >
                 {isMasked ? (
-                  <span style={{ fontSize: metricSize }}>******</span>
+                  <span className="mask-text" style={{ fontSize: metricSize }}>
+                    ******
+                  </span>
                 ) : (
                   <>
                     <span style={{ marginRight: 1 }}>

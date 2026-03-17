@@ -17,6 +17,7 @@
   --border: #1f2937;
   --table-pinned-header-bg: #2a394b;
   --table-row-hover-bg: #2a394b;
+  --table-row-alt-bg: #1a2535;
   --radius: 0.625rem;
   --background: #0f172a;
   --foreground: #e5e7eb;
@@ -63,6 +64,7 @@
   --border: #e2e8f0;
   --table-pinned-header-bg: #e2e8f0;
   --table-row-hover-bg: #e2e8f0;
+  --table-row-alt-bg: #f8fafc;
   --background: #ffffff;
   --foreground: #0f172a;
   --card-foreground: #0f172a;
@@ -99,8 +101,10 @@
 
 html,
 body {
+  overscroll-behavior-y: none;
   height: 100%;
   overflow-x: clip;
+  will-change: auto; /* 或者移除任何 will-change: transform */
 }
 
 body {
@@ -157,6 +161,13 @@ body::before {
   width: 1200px;
   margin: 0 auto;
   padding: 24px;
+  /* 隐藏 y 轴滚动条，保留滚动能力 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.container::-webkit-scrollbar {
+  width: 0;
+  display: none;
 }
 
 .page-width-slider {
@@ -440,9 +451,18 @@ body::before {
   background: #e2e8f0;
 }
 
+[data-theme="light"] .table-row:nth-child(even) {
+  background: var(--table-row-alt-bg);
+}
+
 [data-theme="light"] .table-row-scroll:hover,
 [data-theme="light"] .table-row-scroll.row-hovered {
   background: #e2e8f0;
+}
+
+[data-theme="light"] .table-row-scroll:nth-child(even),
+[data-theme="light"] .table-row-scroll.row-even {
+  background: var(--table-row-alt-bg) !important;
 }
 
 [data-theme="light"] .table-fixed-row.row-hovered {
@@ -958,6 +978,13 @@ input[type="number"] {
     width: 100%;
     max-width: 100%;
     overflow-x: clip;
+    /* 移动端同样隐藏 y 轴滚动条 */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .container::-webkit-scrollbar {
+    width: 0;
+    display: none;
   }
 
   .grid {
@@ -1014,6 +1041,12 @@ input[type="number"] {
 
 .down {
   color: var(--success);
+}
+
+.mask-text,
+.up .mask-text,
+.down .mask-text {
+  color: var(--text) !important;
 }
 
 .list {
@@ -1379,6 +1412,11 @@ input[type="number"] {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.table-row-scroll:nth-child(even),
+.table-row-scroll.row-even {
+  background: var(--table-row-alt-bg) !important;
+}
+
 .table-fixed-row.row-hovered {
   background: rgba(255, 255, 255, 0.08);
 }
@@ -1431,6 +1469,10 @@ input[type="number"] {
 
 .table-row:hover {
   background: #2a394b;
+}
+
+.table-row:nth-child(even) {
+  background: var(--table-row-alt-bg);
 }
 
 .table-row:last-child {
@@ -1824,7 +1866,6 @@ input[type="number"] {
 @media (max-width: 640px) {
   .filter-bar {
     position: sticky;
-    top: 60px; /* Navbar height */
     z-index: 40;
     width: calc(100% + 32px);
     background: rgba(15, 23, 42, 0.9);
@@ -1953,6 +1994,11 @@ input[type="number"] {
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.3);
 }
 
+/* 指数个性化设置侧弹框：加宽以一行展示 5 个指数卡片 */
+.pc-market-setting-drawer.pc-table-setting-drawer {
+  width: 560px;
+}
+
 .pc-table-setting-header {
   display: flex;
   align-items: center;
@@ -2009,9 +2055,11 @@ input[type="number"] {
   flex-shrink: 0;
 }
 
+/* 亮色主题下，PC 右侧抽屉里的 Switch 拇指使用浅色，以保证对比度 */
 [data-theme="light"] .pc-table-setting-drawer .dca-toggle-thumb {
   background: #fff;
 }
+
 
 /* 移动端表格设置底部抽屉 */
 .mobile-setting-overlay {
@@ -2022,6 +2070,79 @@ input[type="number"] {
   display: flex;
   align-items: flex-end;
   justify-content: center;
+}
+
+/* shadcn Drawer：符合项目规范，适配亮/暗主题 */
+.drawer-shadow-bottom {
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.3);
+}
+.drawer-shadow-top {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+[data-theme="light"] .drawer-shadow-bottom {
+  box-shadow: 0 -4px 24px rgba(15, 23, 42, 0.12);
+}
+[data-theme="light"] .drawer-shadow-top {
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.12);
+}
+
+/* Drawer 内容玻璃拟态：与 Dialog 统一的毛玻璃效果（更通透） */
+.drawer-content-theme {
+  background: rgba(15, 23, 42, 0);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+[data-theme="light"] .drawer-content-theme {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-color: rgba(148, 163, 184, 0.6);
+}
+
+/* shadcn Dialog：符合项目规范(ui-ux-pro-max)，适配亮/暗主题，略微玻璃拟态 */
+[data-slot="dialog-content"] {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="light"] [data-slot="dialog-content"] {
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.dialog-content-shadow {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+[data-theme="light"] .dialog-content-shadow {
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.08);
+}
+
+[data-slot="dialog-content"] [data-slot="dialog-close"] {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+[data-slot="dialog-content"] [data-slot="dialog-close"]:hover {
+  color: var(--foreground);
+  opacity: 1;
+}
+
+[data-slot="dialog-content"] [data-slot="dialog-close"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+[data-slot="dialog-title"] {
+  color: var(--foreground);
+}
+
+[data-slot="dialog-description"] {
+  color: var(--muted-foreground);
 }
 
 .mobile-setting-drawer {
@@ -2172,6 +2293,10 @@ input[type="number"] {
 .trade-revoke-btn {
   background: rgba(255, 255, 255, 0.05) !important;
   color: var(--text) !important;
+}
+
+[data-theme="light"] .trade-modal .queue-button {
+  color: #ffffff !important;
 }
 
 .trade-time-slot {
@@ -2375,6 +2500,13 @@ input[type="number"] {
   border-radius: 50%;
   background: #0f172a;
   transition: left 0.2s;
+}
+
+/* 亮色主题下：所有使用 dca-toggle 的拇指在浅底上统一用白色，保证对比度
+   - PC 右侧排序设置抽屉
+   - 移动端排序个性化设置 Drawer（以及其它区域） */
+[data-theme="light"] .dca-toggle-thumb {
+  background: #ffffff;
 }
 
 .dca-option-group {
