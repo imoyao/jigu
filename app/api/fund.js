@@ -20,6 +20,35 @@ dayjs.tz.setDefault(TZ);
 const nowInTz = () => dayjs().tz(TZ);
 const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
 
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 获取基金「关联板块/跟踪标的」信息（走本地 API，并做 1 天缓存）
+ * 接口：/api/related-sectors?code=xxxxxx
+ * 返回：{ code: string, relatedSectors: string }
+ */
+export const fetchRelatedSectors = async (code, { cacheTime = ONE_DAY_MS } = {}) => {
+  if (!code) return '';
+  const normalized = String(code).trim();
+  if (!normalized) return '';
+
+  const url = `/api/related-sectors?code=${encodeURIComponent(normalized)}`;
+  const cacheKey = `relatedSectors:${normalized}`;
+
+  try {
+    const data = await cachedRequest(async () => {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      return await res.json();
+    }, cacheKey, { cacheTime });
+
+    const relatedSectors = data?.relatedSectors;
+    return relatedSectors ? String(relatedSectors).trim() : '';
+  } catch (e) {
+    return '';
+  }
+};
+
 export const loadScript = (url) => {
   if (typeof document === 'undefined' || !document.body) return Promise.resolve(null);
 
