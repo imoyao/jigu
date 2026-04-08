@@ -16,6 +16,7 @@ import Announcement from "./components/Announcement";
 import EmptyStateCard from "./components/EmptyStateCard";
 import FundCard from "./components/FundCard";
 import GroupSummary from "./components/GroupSummary";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "@/components/ui/empty"
 import {
   CloseIcon,
   EyeIcon,
@@ -80,6 +81,7 @@ import PcFundTable from './components/PcFundTable';
 import MobileFundTable from './components/MobileFundTable';
 import MobileBottomNav from './components/MobileBottomNav';
 import MineTab from './components/MineTab';
+import SearchFund from './components/SearchFund';
 import MyEarningsCalendarPage from './components/MyEarningsCalendarPage';
 import { useFundFuzzyMatcher } from './hooks/useFundFuzzyMatcher';
 import {
@@ -236,6 +238,8 @@ export default function HomePage() {
   const [containerWidth, setContainerWidth] = useState(1200);
   const [showMarketIndexPc, setShowMarketIndexPc] = useState(true);
   const [showMarketIndexMobile, setShowMarketIndexMobile] = useState(true);
+  const [showGroupFundSearchPc, setShowGroupFundSearchPc] = useState(true);
+  const [showGroupFundSearchMobile, setShowGroupFundSearchMobile] = useState(true);
   const [isGroupSummarySticky, setIsGroupSummarySticky] = useState(false);
 
   useEffect(() => {
@@ -251,6 +255,8 @@ export default function HomePage() {
       }
       if (typeof parsed?.showMarketIndexPc === 'boolean') setShowMarketIndexPc(parsed.showMarketIndexPc);
       if (typeof parsed?.showMarketIndexMobile === 'boolean') setShowMarketIndexMobile(parsed.showMarketIndexMobile);
+      if (typeof parsed?.showGroupFundSearchPc === 'boolean') setShowGroupFundSearchPc(parsed.showGroupFundSearchPc);
+      if (typeof parsed?.showGroupFundSearchMobile === 'boolean') setShowGroupFundSearchMobile(parsed.showGroupFundSearchMobile);
     } catch { }
   }, []);
 
@@ -470,6 +476,9 @@ export default function HomePage() {
   const [addResultOpen, setAddResultOpen] = useState(false);
   const [addFailures, setAddFailures] = useState([]);
 
+  // 分组内基金列表搜索（点击按钮后才应用）
+  const [groupFundSearchTerm, setGroupFundSearchTerm] = useState('');
+
   // 动态计算 Navbar 和 FilterBar 高度
   const navbarRef = useRef(null);
   const filterBarRef = useRef(null);
@@ -602,6 +611,7 @@ export default function HomePage() {
   }, []);
 
   const shouldShowMarketIndex = isMobile ? showMarketIndexMobile : showMarketIndexPc;
+  const shouldShowGroupFundSearch = isMobile ? showGroupFundSearchMobile : showGroupFundSearchPc;
 
   // 当关闭大盘指数时，重置它的高度，避免 top/stickyTop 仍沿用旧值
   useEffect(() => {
@@ -877,15 +887,30 @@ export default function HomePage() {
     return out;
   }, [transactions, activeGroupId]);
 
-  // 过滤和排序后的基金列表
+  // 当前 tab 作用域下的基金（不包含“列表搜索”过滤）
+  const scopedFunds = useMemo(() => {
+    return funds.filter((f) => {
+      if (currentTab === 'all') return true;
+      if (currentTab === 'fav') return favorites.has(f.code);
+      const group = groups.find((g) => g.id === currentTab);
+      return group ? group.codes.includes(f.code) : true;
+    });
+  }, [funds, currentTab, favorites, groups]);
+
+  // 过滤和排序后的基金列表（包含“列表搜索”过滤）
   const displayFunds = useMemo(
     () => {
-      let filtered = funds.filter(f => {
-        if (currentTab === 'all') return true;
-        if (currentTab === 'fav') return favorites.has(f.code);
-        const group = groups.find(g => g.id === currentTab);
-        return group ? group.codes.includes(f.code) : true;
-      });
+      let filtered = [...scopedFunds];
+
+      const q = (shouldShowGroupFundSearch ? (groupFundSearchTerm || '') : '').trim();
+      if (q) {
+        const qLower = q.toLowerCase();
+        filtered = filtered.filter((f) => {
+          const name = String(f?.name ?? '').toLowerCase();
+          const code = String(f?.code ?? '').toLowerCase();
+          return name.includes(qLower) || code.includes(qLower);
+        });
+      }
 
       if (currentTab !== 'all' && currentTab !== 'fav' && sortBy === 'default') {
         const group = groups.find(g => g.id === currentTab);
@@ -979,7 +1004,7 @@ export default function HomePage() {
         return 0;
       });
     },
-    [funds, currentTab, favorites, groups, sortBy, sortOrder, holdingsForTab, getHoldingProfit],
+    [scopedFunds, currentTab, groups, sortBy, sortOrder, holdingsForTab, getHoldingProfit, groupFundSearchTerm, shouldShowGroupFundSearch],
   );
 
   // PC 端表格数据（用于 PcFundTable）
@@ -4154,7 +4179,7 @@ export default function HomePage() {
     await refreshAll(codes);
   };
 
-  const saveSettings = (e, secondsOverride, showMarketIndexOverride, isMobileOverride) => {
+  const saveSettings = (e, secondsOverride, showMarketIndexOverride, showGroupFundSearchOverride, isMobileOverride) => {
     e?.preventDefault?.();
     const seconds = secondsOverride ?? tempSeconds;
     const ms = Math.max(30, Number(seconds)) * 1000;
@@ -4169,6 +4194,15 @@ export default function HomePage() {
     const targetIsMobile = Boolean(isMobileOverride);
     if (targetIsMobile) setShowMarketIndexMobile(nextShowMarketIndex);
     else setShowMarketIndexPc(nextShowMarketIndex);
+
+    const nextShowGroupFundSearch = typeof showGroupFundSearchOverride === 'boolean'
+      ? showGroupFundSearchOverride
+      : targetIsMobile
+        ? showGroupFundSearchMobile
+        : showGroupFundSearchPc;
+    if (targetIsMobile) setShowGroupFundSearchMobile(nextShowGroupFundSearch);
+    else setShowGroupFundSearchPc(nextShowGroupFundSearch);
+
     storageHelper.setItem('refreshMs', String(ms));
     const w = Math.min(2000, Math.max(600, Number(containerWidth) || 1200));
     setContainerWidth(w);
@@ -4181,12 +4215,14 @@ export default function HomePage() {
           ...parsed,
           pcContainerWidth: w,
           showMarketIndexMobile: nextShowMarketIndex,
+          showGroupFundSearchMobile: nextShowGroupFundSearch,
         }));
       } else {
         window.localStorage.setItem('customSettings', JSON.stringify({
           ...parsed,
           pcContainerWidth: w,
           showMarketIndexPc: nextShowMarketIndex,
+          showGroupFundSearchPc: nextShowGroupFundSearch,
         }));
       }
       triggerCustomSettingsSync();
@@ -5932,7 +5968,7 @@ export default function HomePage() {
             </div>
           </div>
 
-          {displayFunds.length === 0 ? (
+          {scopedFunds.length === 0 ? (
             <EmptyStateCard
               fundsLength={funds.length}
               currentTab={currentTab}
@@ -5953,17 +5989,38 @@ export default function HomePage() {
                   marketIndexAccordionHeight={marketIndexAccordionHeight}
                   navbarHeight={navbarHeight}
                 />
+              {shouldShowGroupFundSearch && (
+                <SearchFund
+                  value={groupFundSearchTerm}
+                  onSearch={(next) => setGroupFundSearchTerm(next)}
+                />
+              )}
 
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={viewMode}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  transition={{ duration: 0.2 }}
-                  className={viewMode === 'card' ? 'grid' : 'table-container glass'}
-                  style={{ marginTop: isGroupSummarySticky ? 50 : 0 }}
-                >
+              {displayFunds.length === 0 ? (
+                <div style={{ marginTop: 10 }}>
+                  <Empty className="border-border/60">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <span className="text-3xl" aria-hidden="true">📂</span>
+                      </EmptyMedia>
+                      <EmptyTitle>未找到相关基金</EmptyTitle>
+                      <EmptyDescription>
+                        试试搜索基金名称的部分关键词，或直接输入 6 位基金代码。
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </div>
+              ) : (
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={viewMode}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className={viewMode === 'card' ? 'grid' : 'table-container glass'}
+                    style={{ marginTop: isGroupSummarySticky ? 50 : 0 }}
+                  >
                   <div className={viewMode === 'card' ? 'grid col-12' : ''} style={viewMode === 'card' ? { gridColumn: 'span 12', gap: 16 } : {}}>
                     {/* PC 列表：使用 PcFundTable + 右侧冻结操作列 */}
                     {viewMode === 'list' && !isMobile && (
@@ -6196,6 +6253,7 @@ export default function HomePage() {
                   </div>
                 </motion.div>
               </AnimatePresence>
+              )}
 
               {currentTab !== 'all' && currentTab !== 'fav' && (
                 <motion.button
@@ -6670,6 +6728,8 @@ export default function HomePage() {
           onResetContainerWidth={handleResetContainerWidth}
           showMarketIndexPc={showMarketIndexPc}
           showMarketIndexMobile={showMarketIndexMobile}
+          showGroupFundSearchPc={showGroupFundSearchPc}
+          showGroupFundSearchMobile={showGroupFundSearchMobile}
         />
       )}
 
