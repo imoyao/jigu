@@ -1,7 +1,7 @@
 'use client';
 
 import ReactDOM from 'react-dom';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { throttle } from 'lodash';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -34,30 +34,44 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { DragIcon, ExitIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon } from './Icons';
-import { fetchRelatedSectors } from '@/app/api/fund';
+import { DragIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon } from './Icons';
+import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
 
 const NON_FROZEN_COLUMN_IDS = [
   'relatedSector',
   'yesterdayChangePercent',
   'estimateChangePercent',
-  'totalChangePercent',
-  'holdingAmount',
   'todayProfit',
+  'totalChangePercent',
+  'yesterdayProfit',
   'holdingProfit',
   'latestNav',
+  'holdingDays',
+  'period1w',
+  'period1m',
+  'period3m',
+  'period6m',
+  'period1y',
+  'holdingAmount',
   'estimateNav',
 ];
 
 const COLUMN_HEADERS = {
   relatedSector: '关联板块',
+  period1w: '近1周',
+  period1m: '近1月',
+  period3m: '近3月',
+  period6m: '近6月',
+  period1y: '近1年',
   latestNav: '最新净值',
   estimateNav: '估算净值',
-  yesterdayChangePercent: '昨日涨幅',
-  estimateChangePercent: '估值涨幅',
+  yesterdayChangePercent: '最新涨幅',
+  estimateChangePercent: '估算涨幅',
   totalChangePercent: '估算收益',
   holdingAmount: '持仓金额',
+  holdingDays: '持有天数',
   todayProfit: '当日收益',
+  yesterdayProfit: '昨日收益',
   holdingProfit: '持有收益',
 };
 
@@ -118,8 +132,8 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  *     code?: string;                // 基金代码（可选，只用于展示在名称下方）
  *     latestNav: string|number;     // 最新净值
  *     estimateNav: string|number;   // 估算净值
- *     yesterdayChangePercent: string|number; // 昨日涨幅
- *     estimateChangePercent: string|number;  // 估值涨幅
+ *     yesterdayChangePercent: string|number; // 最新涨幅
+ *     estimateChangePercent: string|number;  // 估算涨幅
  *     holdingAmount: string|number;         // 持仓金额
  *     todayProfit: string|number;           // 当日收益
  *     holdingProfit: string|number;         // 持有收益
@@ -128,7 +142,6 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {string} [props.currentTab] - 当前分组
  * @param {Set<string>} [props.favorites] - 自选集合
  * @param {(row: any) => void} [props.onToggleFavorite] - 添加/取消自选
- * @param {(row: any) => void} [props.onRemoveFromGroup] - 从当前分组移除
  * @param {(row: any, meta: { hasHolding: boolean }) => void} [props.onHoldingAmountClick] - 点击持仓金额
  * @param {boolean} [props.refreshing] - 是否处于刷新状态（控制删除按钮禁用态）
  * @param {(row: any) => Object} [props.getFundCardProps] - 给定行返回 FundCard 的 props；传入后点击基金名称将用弹框展示卡片详情
@@ -136,14 +149,15 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {boolean} [props.blockDialogClose] - 为 true 时阻止点击遮罩关闭弹框（如删除确认弹框打开时）
  * @param {number} [props.stickyTop] - 表头固定时的 top 偏移（与 MobileFundTable 一致，用于适配导航栏、筛选栏等）
  * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
+ * @param {string} [props.relatedSectorSessionKey] - 登录用户 id（未登录传空），用于关联板块查询缓存与登录后重新拉取
  */
 export default function PcFundTable({
   data = [],
   onRemoveFund,
+  onRemoveFunds,
   currentTab,
   favorites = new Set(),
   onToggleFavorite,
-  onRemoveFromGroup,
   onHoldingAmountClick,
   onHoldingProfitClick, // 保留以兼容调用方，表格内已不再使用点击切换
   refreshing = false,
@@ -155,6 +169,7 @@ export default function PcFundTable({
   blockDialogClose = false,
   stickyTop = 0,
   masked = false,
+  relatedSectorSessionKey = '',
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -193,6 +208,56 @@ export default function PcFundTable({
     setActiveId(null);
   };
   const groupKey = currentTab ?? 'all';
+
+  const isGroupTab = currentTab && currentTab !== 'all' && currentTab !== 'fav';
+  // 批量删除：之前仅自定义分组支持，这里扩展到「全部 / 自选 / 自定义分组」
+  const batchRemoveEnabled = sortBy === 'default' && (currentTab === 'all' || currentTab === 'fav' || isGroupTab);
+  const selectableCodes = useMemo(
+    () => (Array.isArray(data) ? data.map((d) => d?.code).filter(Boolean) : []),
+    [data],
+  );
+  const [selectedCodes, setSelectedCodes] = useState(() => new Set());
+
+  useEffect(() => {
+    setSelectedCodes(new Set());
+  }, [currentTab]);
+
+  useEffect(() => {
+    if (!batchRemoveEnabled) setSelectedCodes(new Set());
+  }, [batchRemoveEnabled]);
+
+  useEffect(() => {
+    setSelectedCodes((prev) => {
+      if (!prev?.size) return prev;
+      const allowed = new Set(selectableCodes);
+      let changed = false;
+      const next = new Set();
+      for (const c of prev) {
+        if (allowed.has(c)) next.add(c);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [selectableCodes]);
+
+  const toggleSelected = useCallback((code, checked) => {
+    if (!code) return;
+    setSelectedCodes((prev) => {
+      const next = new Set(prev || []);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return next;
+    });
+  }, []);
+
+  const setAllSelected = useCallback((checked) => {
+    setSelectedCodes(() => {
+      if (!checked) return new Set();
+      return new Set(selectableCodes);
+    });
+  }, [selectableCodes]);
+
+  const selectedCount = selectedCodes?.size || 0;
 
   const getCustomSettingsWithMigration = () => {
     if (typeof window === 'undefined') return {};
@@ -288,13 +353,13 @@ export default function PcFundTable({
     const vis = currentGroupPc?.pcTableColumnVisibility ?? null;
     if (vis && typeof vis === 'object' && Object.keys(vis).length > 0) {
       const next = { ...vis };
-      if (next.relatedSector === undefined) next.relatedSector = false;
+      NON_FROZEN_COLUMN_IDS.forEach((id) => {
+        if (next[id] === undefined) next[id] = true;
+      });
       return next;
     }
     const allVisible = {};
     NON_FROZEN_COLUMN_IDS.forEach((id) => { allVisible[id] = true; });
-    // 新增列：默认隐藏（用户可在表格设置中开启）
-    allVisible.relatedSector = false;
     return allVisible;
   })();
   const columnSizing = (() => {
@@ -366,7 +431,6 @@ export default function PcFundTable({
     NON_FROZEN_COLUMN_IDS.forEach((id) => {
       allVisible[id] = true;
     });
-    allVisible.relatedSector = false;
     setColumnVisibility(allVisible);
   };
   const handleToggleColumnVisibility = (columnId, visible) => {
@@ -374,7 +438,6 @@ export default function PcFundTable({
   };
   const onRemoveFundRef = useRef(onRemoveFund);
   const onToggleFavoriteRef = useRef(onToggleFavorite);
-  const onRemoveFromGroupRef = useRef(onRemoveFromGroup);
   const onHoldingAmountClickRef = useRef(onHoldingAmountClick);
 
   useEffect(() => {
@@ -387,12 +450,10 @@ export default function PcFundTable({
   useEffect(() => {
     onRemoveFundRef.current = onRemoveFund;
     onToggleFavoriteRef.current = onToggleFavorite;
-    onRemoveFromGroupRef.current = onRemoveFromGroup;
     onHoldingAmountClickRef.current = onHoldingAmountClick;
   }, [
     onRemoveFund,
     onToggleFavorite,
-    onRemoveFromGroup,
     onHoldingAmountClick,
   ]);
 
@@ -457,8 +518,20 @@ export default function PcFundTable({
   const relatedSectorEnabled = columnVisibility?.relatedSector !== false;
   const relatedSectorCacheRef = useRef(new Map());
   const [relatedSectorByCode, setRelatedSectorByCode] = useState({});
+  const [sectorQuoteByLabel, setSectorQuoteByLabel] = useState({});
 
-  const fetchRelatedSector = async (code) => fetchRelatedSectors(code);
+  const sectorAuthSegment = relatedSectorSessionKey || 'anon';
+
+  const fetchRelatedSector = useCallback(
+    (code) => fetchRelatedSectors(code, { authSegment: sectorAuthSegment }),
+    [sectorAuthSegment],
+  );
+
+  useEffect(() => {
+    relatedSectorCacheRef.current.clear();
+    setRelatedSectorByCode({});
+    setSectorQuoteByLabel({});
+  }, [sectorAuthSegment]);
 
   const runWithConcurrency = async (items, limit, worker) => {
     const queue = [...items];
@@ -467,7 +540,7 @@ export default function PcFundTable({
       while (queue.length) {
         const item = queue.shift();
         if (item == null) continue;
-         
+
         results.push(await worker(item));
       }
     });
@@ -497,7 +570,119 @@ export default function PcFundTable({
     })();
 
     return () => { cancelled = true; };
-  }, [relatedSectorEnabled, data]);
+  }, [relatedSectorEnabled, data, sectorAuthSegment, fetchRelatedSector]);
+
+  useEffect(() => {
+    if (!relatedSectorEnabled) return;
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const labels = new Set();
+    for (const row of data) {
+      const code = row?.code;
+      const lbl = code && relatedSectorByCode[code];
+      const t = lbl != null ? String(lbl).trim() : '';
+      if (t) labels.add(t);
+    }
+    if (labels.size === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      await runWithConcurrency([...labels], 4, async (label) => {
+        const quote = await fetchRelatedSectorLiveQuote(label);
+        if (cancelled) return;
+        setSectorQuoteByLabel((prev) => {
+          const prevQ = prev[label];
+          if (prevQ === quote) return prev;
+          if (
+            prevQ &&
+            quote &&
+            prevQ.pct === quote.pct &&
+            prevQ.name === quote.name &&
+            prevQ.code === quote.code
+          ) {
+            return prev;
+          }
+          return { ...prev, [label]: quote };
+        });
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [relatedSectorEnabled, data, relatedSectorByCode]);
+
+  const withRelatedSectorFund = useCallback(
+    (row) => {
+      if (!row || !row.code) return row;
+      const rawValue = relatedSectorByCode?.[row.code] ?? relatedSectorCacheRef.current.get(row.code) ?? '';
+      const relatedSector = rawValue != null ? String(rawValue).trim() : '';
+      const quote = relatedSector ? sectorQuoteByLabel?.[relatedSector] : null;
+      const quoteName = quote?.name != null ? String(quote.name).trim() : '';
+      const quotePct = quote?.pct == null ? null : Number(quote.pct);
+      const hasQuotePct = quotePct != null && Number.isFinite(quotePct);
+
+      return {
+        ...row,
+        rawFund: {
+          ...(row.rawFund || { code: row.code, name: row.fundName }),
+          relatedSector,
+          relatedSectorQuoteName: quoteName,
+          relatedSectorQuotePct: hasQuotePct ? quotePct : null,
+        },
+      };
+    },
+    [relatedSectorByCode, sectorQuoteByLabel],
+  );
+
+  const getFundCardPropsWithRelatedSector = useCallback(
+    (row) => {
+      if (!getFundCardProps) return {};
+      return getFundCardProps(withRelatedSectorFund(row));
+    },
+    [getFundCardProps, withRelatedSectorFund],
+  );
+
+  const periodReturnsEnabled =
+    columnVisibility?.period1w !== false
+    || columnVisibility?.period1m !== false
+    || columnVisibility?.period3m !== false
+    || columnVisibility?.period6m !== false
+    || columnVisibility?.period1y !== false;
+  const periodReturnsCacheRef = useRef(new Map());
+  const [periodReturnsByCode, setPeriodReturnsByCode] = useState({});
+
+  useEffect(() => {
+    if (!periodReturnsEnabled) return;
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
+    const missing = codes.filter((code) => !periodReturnsCacheRef.current.has(code));
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      await runWithConcurrency(missing, 4, async (code) => {
+        const value = await fetchFundPeriodReturns(code);
+        periodReturnsCacheRef.current.set(code, value);
+        if (cancelled) return;
+        setPeriodReturnsByCode((prev) => {
+          const prevVal = prev[code];
+          if (
+            prevVal
+            && prevVal.week === value.week
+            && prevVal.month === value.month
+            && prevVal.month3 === value.month3
+            && prevVal.month6 === value.month6
+            && prevVal.year1 === value.year1
+          ) {
+            return prev;
+          }
+          return { ...prev, [code]: value };
+        });
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [periodReturnsEnabled, data]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -533,11 +718,39 @@ export default function PcFundTable({
     const isUpdated = original.isUpdated;
     const hasDca = original.hasDca;
     const isFavorites = favorites?.has?.(code);
-    const isGroupTab = currentTab && currentTab !== 'all' && currentTab !== 'fav';
     const rowContext = useContext(SortableRowContext);
 
     return (
       <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8 }}>
+                {batchRemoveEnabled && (
+          <label
+            title="选择用于批量删除"
+            onClick={(e) => e.stopPropagation?.()}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              flexShrink: 0,
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedCodes?.has?.(code) || false}
+              onChange={(e) => toggleSelected(code, e.target.checked)}
+              onClick={(e) => e.stopPropagation?.()}
+              style={{
+                width: 14,
+                height: 14,
+                accentColor: 'var(--primary)',
+                cursor: 'pointer',
+              }}
+              aria-label="选择基金"
+            />
+          </label>
+        )}
         {sortBy === 'default' && (
           <button
             className="icon-button drag-handle"
@@ -550,19 +763,7 @@ export default function PcFundTable({
             <DragIcon width="16" height="16" />
           </button>
         )}
-        {isGroupTab ? (
-          <button
-            className="icon-button fav-button"
-            onClick={(e) => {
-              e.stopPropagation?.();
-              onRemoveFromGroupRef.current?.(original);
-            }}
-            title="从小分组移除"
-            style={{ backgroundColor: 'transparent'}}
-          >
-            <ExitIcon width="18" height="18" style={{ transform: 'rotate(180deg)' }} />
-          </button>
-        ) : (
+        {!isGroupTab && !batchRemoveEnabled ? (
           <button
             className={`icon-button fav-button ${isFavorites ? 'active' : ''}`}
             onClick={(e) => {
@@ -573,7 +774,7 @@ export default function PcFundTable({
           >
             <StarIcon width="18" height="18" filled={isFavorites} />
           </button>
-        )}
+        ) : null}
         <div
           className="title-text"
           role={onOpenCardDialog ? 'button' : undefined}
@@ -603,7 +804,29 @@ export default function PcFundTable({
     () => [
       {
         accessorKey: 'fundName',
-        header: '基金名称',
+        header: () => {
+          if (!batchRemoveEnabled) return '基金名称';
+          const allCount = selectableCodes.length;
+          const checked = allCount > 0 && selectedCount === allCount;
+          const indeterminate = selectedCount > 0 && selectedCount < allCount;
+          return (
+            <BatchRemoveHeader
+              checked={checked}
+              indeterminate={indeterminate}
+              selectedCount={selectedCount}
+              totalCount={allCount}
+              onToggleAll={(nextChecked) => setAllSelected(nextChecked)}
+              onClear={() => setSelectedCodes(new Set())}
+              onRemove={() => {
+                if (!onRemoveFunds || selectedCount === 0) return;
+                const codes = Array.from(selectedCodes);
+                onRemoveFunds(codes);
+                setSelectedCodes(new Set());
+              }}
+              disabled={refreshing || selectedCount === 0}
+            />
+          );
+        },
         size: 265,
         minSize: 140,
         enablePinning: true,
@@ -629,9 +852,47 @@ export default function PcFundTable({
           const code = original.code;
           const value = (code && (relatedSectorByCode?.[code] ?? relatedSectorCacheRef.current.get(code))) || '';
           const display = value || '—';
+          const labelKey = value ? String(value).trim() : '';
+          const quote = labelKey ? sectorQuoteByLabel?.[labelKey] : null;
+          const nameFromQuote = quote?.name != null ? String(quote.name).trim() : '';
+          const firstLine = nameFromQuote || display;
+          const pct = quote?.pct;
+          const pctText = pct != null ? `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%` : null;
+          const pctCls = pct != null ? (pct > 0 ? 'up' : pct < 0 ? 'down' : '') : '';
           return (
-            <div style={{ width: '100%', textAlign: value ? 'left' : 'right', fontSize: '14px' }}>
-              {display}
+            <div
+              style={{
+                width: '100%',
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                gap: 2,
+              }}
+            >
+              <span
+                title={firstLine !== '—' ? firstLine : undefined}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  textAlign: 'right',
+                  fontSize: '14px',
+                }}
+              >
+                {firstLine}
+              </span>
+              {pctText != null ? (
+                <span
+                  className={pctCls}
+                  style={{ fontSize: '11px', fontWeight: 600, textAlign: 'right' }}
+                >
+                  {pctText}
+                </span>
+              ) : null}
             </div>
           );
         },
@@ -639,6 +900,121 @@ export default function PcFundTable({
           align: 'right',
           cellClassName: 'related-sector-cell',
         },
+      },
+      {
+        id: 'period1w',
+        header: '近1周',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.week : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {text}
+              </FitText>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell' },
+      },
+      {
+        id: 'period1m',
+        header: '近1月',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {text}
+              </FitText>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell' },
+      },
+      {
+        id: 'period3m',
+        header: '近3月',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month3 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {text}
+              </FitText>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell' },
+      },
+      {
+        id: 'period6m',
+        header: '近6月',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month6 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {text}
+              </FitText>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell' },
+      },
+      {
+        id: 'period1y',
+        header: '近1年',
+        size: 88,
+        minSize: 72,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.year1 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+                {text}
+              </FitText>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell' },
       },
       {
         accessorKey: 'latestNav',
@@ -696,7 +1072,7 @@ export default function PcFundTable({
       },
       {
         accessorKey: 'yesterdayChangePercent',
-        header: '昨日涨幅',
+        header: '最新涨幅',
         size: 135,
         minSize: 100,
         cell: (info) => {
@@ -723,7 +1099,7 @@ export default function PcFundTable({
       },
       {
         accessorKey: 'estimateChangePercent',
-        header: '估值涨幅',
+        header: '估算涨幅',
         size: 135,
         minSize: 100,
         cell: (info) => {
@@ -850,6 +1226,28 @@ export default function PcFundTable({
         },
       },
       {
+        accessorKey: 'holdingDays',
+        header: '持有天数',
+        size: 100,
+        minSize: 80,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const value = original.holdingDaysValue;
+          if (value == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+            <div style={{ fontWeight: 700, textAlign: 'right' }}>
+              {value}
+            </div>
+          );
+        },
+        meta: {
+          align: 'right',
+          cellClassName: 'holding-days-cell',
+        },
+      },
+      {
         accessorKey: 'todayProfit',
         header: '当日收益',
         size: 135,
@@ -867,7 +1265,7 @@ export default function PcFundTable({
               <FitText className={cls} style={{ fontWeight: 700, display: 'block' }} maxFontSize={14} minFontSize={10}>
                 {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
               </FitText>
-              {percentStr && !isUpdated && !masked ? (
+              {percentStr && !masked ? (
                 <span className={`${cls} today-profit-percent`} style={{ display: 'block', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
                   <FitText maxFontSize={11} minFontSize={9}>
                     {percentStr}
@@ -880,6 +1278,42 @@ export default function PcFundTable({
         meta: {
           align: 'right',
           cellClassName: 'profit-cell',
+        },
+      },
+      {
+        accessorKey: 'yesterdayProfit',
+        header: '昨日收益',
+        size: 135,
+        minSize: 100,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const value = original.yesterdayProfitValue;
+          const hasProfit = value != null;
+          const cls = hasProfit ? (value > 0 ? 'up' : value < 0 ? 'down' : '') : 'muted';
+          const amountStr = hasProfit ? (info.getValue() ?? '') : '—';
+          const percentStr = original.yesterdayProfitPercent ?? '';
+          const pctVal = original.yesterdaySecondLinePctValue;
+          const pctCls = pctVal != null && Number.isFinite(pctVal)
+            ? (pctVal > 0 ? 'up' : pctVal < 0 ? 'down' : '')
+            : 'muted';
+          return (
+            <div style={{ width: '100%' }}>
+              <FitText className={cls} style={{ fontWeight: 700, display: 'block' }} maxFontSize={14} minFontSize={10}>
+                {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
+              </FitText>
+              {percentStr && !masked ? (
+                <span className={`${pctCls} yesterday-profit-percent`} style={{ display: 'block', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
+                  <FitText maxFontSize={11} minFontSize={9}>
+                    {percentStr}
+                  </FitText>
+                </span>
+              ) : null}
+            </div>
+          );
+        },
+        meta: {
+          align: 'right',
+          cellClassName: 'yesterday-profit-cell',
         },
       },
       {
@@ -972,7 +1406,25 @@ export default function PcFundTable({
         },
       },
     ],
-    [currentTab, favorites, refreshing, sortBy, showFullFundName, getFundCardProps, masked, relatedSectorByCode],
+    [
+      currentTab,
+      favorites,
+      refreshing,
+      sortBy,
+      showFullFundName,
+      getFundCardProps,
+      masked,
+      relatedSectorByCode,
+      sectorQuoteByLabel,
+      periodReturnsByCode,
+      batchRemoveEnabled,
+      selectableCodes.length,
+      selectedCount,
+      selectedCodes,
+      onRemoveFunds,
+      setAllSelected,
+      toggleSelected,
+    ],
   );
 
   const table = useReactTable({
@@ -1300,7 +1752,12 @@ export default function PcFundTable({
         )}
       </div>
       {!!(cardDialogRow && getFundCardProps) && (
-        <FundDetailDialog blockDialogClose={blockDialogClose} cardDialogRow={cardDialogRow} getFundCardProps={getFundCardProps} setCardDialogRow={setCardDialogRow} />
+        <FundDetailDialog
+          blockDialogClose={blockDialogClose}
+          cardDialogRow={cardDialogRow}
+          getFundCardProps={getFundCardPropsWithRelatedSector}
+          setCardDialogRow={setCardDialogRow}
+        />
       )}
       <PcTableSettingModal
         open={settingModalOpen}
@@ -1349,4 +1806,79 @@ function FundDetailDialog({ blockDialogClose, cardDialogRow, getFundCardProps, s
       </DialogContent>
     </Dialog>
   )
+}
+
+function BatchRemoveHeader({
+  checked,
+  indeterminate,
+  selectedCount,
+  totalCount,
+  onToggleAll,
+  onRemove,
+  onClear,
+  disabled,
+}) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, width: '100%', justifyContent: 'space-between' }}>
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <label
+          title={checked ? '取消全选' : '全选'}
+          onClick={(e) => e.stopPropagation?.()}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+        >
+          <input
+            ref={ref}
+            type="checkbox"
+            checked={!!checked}
+            onChange={(e) => onToggleAll?.(e.target.checked)}
+            onClick={(e) => e.stopPropagation?.()}
+            style={{ width: 14, height: 14, accentColor: 'var(--primary)', cursor: 'pointer' }}
+            aria-label="全选"
+          />
+          <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+            已选 {selectedCount}/{totalCount}
+          </span>
+        </label>
+        {selectedCount > 0 && (
+          <button
+            className="link-button"
+            onClick={(e) => { e.stopPropagation?.(); onClear?.(); }}
+            style={{ fontSize: 12, opacity: 0.9 }}
+            type="button"
+          >
+            清空
+          </button>
+        )}
+      </div>
+
+      <button
+        className="icon-button"
+        onClick={(e) => { e.stopPropagation?.(); onRemove?.(); }}
+        title="批量删除"
+        disabled={!!disabled}
+        type="button"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '0 10px',
+          height: 28,
+          width: 'auto',
+          opacity: disabled ? 0.6 : 1,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          backgroundColor: 'transparent',
+          border: 'none',
+          color: 'var(--danger)'
+        }}
+      >
+        <TrashIcon width="14" height="14" />
+        <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>批量删除</span>
+      </button>
+    </div>
+  );
 }

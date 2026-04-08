@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -27,27 +27,42 @@ import { throttle } from 'lodash';
 import FitText from './FitText';
 import MobileFundCardDrawer from './MobileFundCardDrawer';
 import MobileSettingModal from './MobileSettingModal';
-import { DragIcon, ExitIcon, SettingsIcon, SortIcon, StarIcon } from './Icons';
-import { fetchRelatedSectors } from '@/app/api/fund';
+import ConfirmModal from './ConfirmModal';
+import { CloseIcon, DragIcon, SettingsIcon, SortIcon, StarIcon, TrashIcon } from './Icons';
+import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
 
 const MOBILE_NON_FROZEN_COLUMN_IDS = [
   'relatedSector',
   'yesterdayChangePercent',
   'estimateChangePercent',
-  'totalChangePercent',
   'todayProfit',
+  'totalChangePercent',
+  'yesterdayProfit',
   'holdingProfit',
   'latestNav',
+  'holdingDays',
+  'period1w',
+  'period1m',
+  'period3m',
+  'period6m',
+  'period1y',
   'estimateNav',
 ];
 const MOBILE_COLUMN_HEADERS = {
   relatedSector: '关联板块',
+  period1w: '近1周',
+  period1m: '近1月',
+  period3m: '近3月',
+  period6m: '近6月',
+  period1y: '近1年',
   latestNav: '最新净值',
   estimateNav: '估算净值',
-  yesterdayChangePercent: '昨日涨幅',
-  estimateChangePercent: '估值涨幅',
+  yesterdayChangePercent: '最新涨幅',
+  estimateChangePercent: '估算涨幅',
   totalChangePercent: '估算收益',
+  holdingDays: '持有天数',
   todayProfit: '当日收益',
+  yesterdayProfit: '昨日收益',
   holdingProfit: '持有收益',
 };
 
@@ -98,13 +113,16 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {string} [props.currentTab] - 当前分组
  * @param {Set<string>} [props.favorites] - 自选集合
  * @param {(row: any) => void} [props.onToggleFavorite] - 添加/取消自选
- * @param {(row: any) => void} [props.onRemoveFromGroup] - 从当前分组移除
  * @param {(row: any, meta: { hasHolding: boolean }) => void} [props.onHoldingAmountClick] - 点击持仓金额
  * @param {boolean} [props.refreshing] - 是否刷新中
  * @param {string} [props.sortBy] - 排序方式，'default' 时长按行触发拖拽排序
  * @param {(oldIndex: number, newIndex: number) => void} [props.onReorder] - 拖拽排序回调
  * @param {(row: any) => Object} [props.getFundCardProps] - 给定行返回 FundCard 的 props；传入后点击基金名称将用底部弹框展示卡片视图
  * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
+ * @param {string} [props.relatedSectorSessionKey] - 登录用户 id（未登录传空），用于关联板块查询缓存与登录后重新拉取
+ * @param {(items: { code: string; name?: string }[]) => void} [props.onBulkRemoveFundsConfirmed] - 批量删除二次确认后执行（与单条删除作用域一致）
+ * @param {(open: boolean) => void} [props.onFundCardDrawerOpenChange] - 基金详情底部 Drawer 打开/关闭时通知父级（用于隐藏底栏等）
+ * @param {(open: boolean) => void} [props.onMobileSettingModalOpenChange] - 移动端表格「个性化设置」弹框打开/关闭时通知父级（用于隐藏底栏等）
  */
 export default function MobileFundTable({
   data = [],
@@ -112,7 +130,6 @@ export default function MobileFundTable({
   currentTab,
   favorites = new Set(),
   onToggleFavorite,
-  onRemoveFromGroup,
   onHoldingAmountClick,
   onHoldingProfitClick, // 保留以兼容调用方，表格内已不再使用点击切换
   refreshing = false,
@@ -124,8 +141,34 @@ export default function MobileFundTable({
   blockDrawerClose = false,
   closeDrawerRef,
   masked = false,
+  relatedSectorSessionKey = '',
+  onBulkRemoveFundsConfirmed,
+  onFundCardDrawerOpenChange,
+  onMobileSettingModalOpenChange,
 }) {
   const [isNameSortMode, setIsNameSortMode] = useState(false);
+  const [isBulkDeleteMode, setIsBulkDeleteMode] = useState(false);
+  const [bulkSelectedCodes, setBulkSelectedCodes] = useState(() => new Set());
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+
+  const bulkLongPressRef = useRef({ timer: null, startX: 0, startY: 0 });
+  const ignoreNextBulkRowClickRef = useRef(false);
+
+  const clearBulkLongPressTimer = useCallback(() => {
+    if (bulkLongPressRef.current.timer) {
+      clearTimeout(bulkLongPressRef.current.timer);
+      bulkLongPressRef.current.timer = null;
+    }
+  }, []);
+
+  const exitBulkDeleteMode = useCallback(() => {
+    clearBulkLongPressTimer();
+    setIsBulkDeleteMode(false);
+    setBulkSelectedCodes(new Set());
+    setBulkDeleteConfirmOpen(false);
+  }, [clearBulkLongPressTimer]);
+
+  useEffect(() => () => clearBulkLongPressTimer(), [clearBulkLongPressTimer]);
 
   // 排序模式下拖拽手柄无需长按，直接拖动即可；非排序模式长按整行触发拖拽
   const sensors = useSensors(
@@ -139,7 +182,7 @@ export default function MobileFundTable({
   const ignoreNextDrawerCloseRef = useRef(false);
 
   const onToggleFavoriteRef = useRef(onToggleFavorite);
-  const onRemoveFromGroupRef = useRef(onRemoveFromGroup);
+  const onRemoveFundRef = useRef(onRemoveFund);
   const onHoldingAmountClickRef = useRef(onHoldingAmountClick);
 
   useEffect(() => {
@@ -151,11 +194,11 @@ export default function MobileFundTable({
 
   useEffect(() => {
     onToggleFavoriteRef.current = onToggleFavorite;
-    onRemoveFromGroupRef.current = onRemoveFromGroup;
+    onRemoveFundRef.current = onRemoveFund;
     onHoldingAmountClickRef.current = onHoldingAmountClick;
   }, [
     onToggleFavorite,
-    onRemoveFromGroup,
+    onRemoveFund,
     onHoldingAmountClick,
   ]);
 
@@ -236,8 +279,6 @@ export default function MobileFundTable({
   const defaultVisibility = (() => {
     const o = {};
     MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => { o[id] = true; });
-    // 新增列：默认隐藏（用户可在表格设置中开启）
-    o.relatedSector = false;
     return o;
   })();
 
@@ -252,7 +293,9 @@ export default function MobileFundTable({
     const vis = currentGroupMobile?.mobileTableColumnVisibility ?? null;
     if (vis && typeof vis === 'object' && Object.keys(vis).length > 0) {
       const next = { ...vis };
-      if (next.relatedSector === undefined) next.relatedSector = false;
+      MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
+        if (next[id] === undefined) next[id] = true;
+      });
       return next;
     }
     return defaultVisibility;
@@ -310,8 +353,16 @@ export default function MobileFundTable({
   const [settingModalOpen, setSettingModalOpen] = useState(false);
 
   useEffect(() => {
+    onMobileSettingModalOpenChange?.(settingModalOpen);
+  }, [settingModalOpen, onMobileSettingModalOpenChange]);
+
+  useEffect(() => {
     if (sortBy !== 'default') setIsNameSortMode(false);
   }, [sortBy]);
+
+  useEffect(() => {
+    if (sortBy !== 'default') exitBulkDeleteMode();
+  }, [sortBy, exitBulkDeleteMode]);
 
   // 排序模式下，点击页面任意区域（含表格外）退出排序；使用冒泡阶段，避免先于排序按钮处理
   useEffect(() => {
@@ -322,12 +373,36 @@ export default function MobileFundTable({
   }, [isNameSortMode]);
 
   const [cardSheetRow, setCardSheetRow] = useState(null);
+
+  const fundCardDrawerOpen = !!(cardSheetRow && getFundCardProps);
+  useEffect(() => {
+    onFundCardDrawerOpenChange?.(fundCardDrawerOpen);
+  }, [fundCardDrawerOpen, onFundCardDrawerOpenChange]);
+
+  useEffect(() => {
+    return () => {
+      onFundCardDrawerOpenChange?.(false);
+      onMobileSettingModalOpenChange?.(false);
+    };
+  }, [onFundCardDrawerOpenChange, onMobileSettingModalOpenChange]);
+
   const tableContainerRef = useRef(null);
   const portalHeaderRef = useRef(null);
   const [tableContainerWidth, setTableContainerWidth] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
   const [showPortalHeader, setShowPortalHeader] = useState(false);
   const [effectiveStickyTop, setEffectiveStickyTop] = useState(stickyTop);
+
+  /* 捕获阶段拦截 selectstart，双保险（部分 Android WebView / iOS 上仅靠 CSS 仍会划选） */
+  useLayoutEffect(() => {
+    const root = tableContainerRef.current;
+    if (!root) return;
+    const onSelectStart = (e) => {
+      e.preventDefault();
+    };
+    root.addEventListener('selectstart', onSelectStart, { capture: true });
+    return () => root.removeEventListener('selectstart', onSelectStart, { capture: true });
+  }, []);
 
   useEffect(() => {
     const el = tableContainerRef.current;
@@ -437,20 +512,39 @@ export default function MobileFundTable({
   const FALLBACK_WIDTHS = {
     fundName: 140,
     relatedSector: 120,
+    period1w: 72,
+    period1m: 72,
+    period3m: 72,
+    period6m: 72,
+    period1y: 72,
     latestNav: 64,
     estimateNav: 64,
     yesterdayChangePercent: 72,
     estimateChangePercent: 80,
     totalChangePercent: 80,
+    holdingDays: 64,
     todayProfit: 80,
+    yesterdayProfit: 80,
     holdingProfit: 80,
   };
 
   const relatedSectorEnabled = mobileColumnVisibility?.relatedSector !== false;
   const relatedSectorCacheRef = useRef(new Map());
   const [relatedSectorByCode, setRelatedSectorByCode] = useState({});
+  const [sectorQuoteByLabel, setSectorQuoteByLabel] = useState({});
 
-  const fetchRelatedSector = async (code) => fetchRelatedSectors(code);
+  const sectorAuthSegment = relatedSectorSessionKey || 'anon';
+
+  const fetchRelatedSector = useCallback(
+    (code) => fetchRelatedSectors(code, { authSegment: sectorAuthSegment }),
+    [sectorAuthSegment],
+  );
+
+  useEffect(() => {
+    relatedSectorCacheRef.current.clear();
+    setRelatedSectorByCode({});
+    setSectorQuoteByLabel({});
+  }, [sectorAuthSegment]);
 
   const runWithConcurrency = async (items, limit, worker) => {
     const queue = [...items];
@@ -458,7 +552,7 @@ export default function MobileFundTable({
       while (queue.length) {
         const item = queue.shift();
         if (item == null) continue;
-        // eslint-disable-next-line no-await-in-loop
+
         await worker(item);
       }
     });
@@ -487,7 +581,119 @@ export default function MobileFundTable({
     })();
 
     return () => { cancelled = true; };
-  }, [relatedSectorEnabled, data]);
+  }, [relatedSectorEnabled, data, sectorAuthSegment, fetchRelatedSector]);
+
+  useEffect(() => {
+    if (!relatedSectorEnabled) return;
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const labels = new Set();
+    for (const row of data) {
+      const code = row?.code;
+      const lbl = code && relatedSectorByCode[code];
+      const t = lbl != null ? String(lbl).trim() : '';
+      if (t) labels.add(t);
+    }
+    if (labels.size === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      await runWithConcurrency([...labels], 4, async (label) => {
+        const quote = await fetchRelatedSectorLiveQuote(label);
+        if (cancelled) return;
+        setSectorQuoteByLabel((prev) => {
+          const prevQ = prev[label];
+          if (prevQ === quote) return prev;
+          if (
+            prevQ &&
+            quote &&
+            prevQ.pct === quote.pct &&
+            prevQ.name === quote.name &&
+            prevQ.code === quote.code
+          ) {
+            return prev;
+          }
+          return { ...prev, [label]: quote };
+        });
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [relatedSectorEnabled, data, relatedSectorByCode]);
+
+  const withRelatedSectorFund = useCallback(
+    (row) => {
+      if (!row || !row.code) return row;
+      const rawValue = relatedSectorByCode?.[row.code] ?? relatedSectorCacheRef.current.get(row.code) ?? '';
+      const relatedSector = rawValue != null ? String(rawValue).trim() : '';
+      const quote = relatedSector ? sectorQuoteByLabel?.[relatedSector] : null;
+      const quoteName = quote?.name != null ? String(quote.name).trim() : '';
+      const quotePct = quote?.pct == null ? null : Number(quote.pct);
+      const hasQuotePct = quotePct != null && Number.isFinite(quotePct);
+
+      return {
+        ...row,
+        rawFund: {
+          ...(row.rawFund || { code: row.code, name: row.fundName }),
+          relatedSector,
+          relatedSectorQuoteName: quoteName,
+          relatedSectorQuotePct: hasQuotePct ? quotePct : null,
+        },
+      };
+    },
+    [relatedSectorByCode, sectorQuoteByLabel],
+  );
+
+  const getFundCardPropsWithRelatedSector = useCallback(
+    (row) => {
+      if (!getFundCardProps) return {};
+      return getFundCardProps(withRelatedSectorFund(row));
+    },
+    [getFundCardProps, withRelatedSectorFund],
+  );
+
+  const periodReturnsEnabled =
+    mobileColumnVisibility?.period1w !== false
+    || mobileColumnVisibility?.period1m !== false
+    || mobileColumnVisibility?.period3m !== false
+    || mobileColumnVisibility?.period6m !== false
+    || mobileColumnVisibility?.period1y !== false;
+  const periodReturnsCacheRef = useRef(new Map());
+  const [periodReturnsByCode, setPeriodReturnsByCode] = useState({});
+
+  useEffect(() => {
+    if (!periodReturnsEnabled) return;
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
+    const missing = codes.filter((code) => !periodReturnsCacheRef.current.has(code));
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      await runWithConcurrency(missing, 4, async (code) => {
+        const value = await fetchFundPeriodReturns(code);
+        periodReturnsCacheRef.current.set(code, value);
+        if (cancelled) return;
+        setPeriodReturnsByCode((prev) => {
+          const prevVal = prev[code];
+          if (
+            prevVal
+            && prevVal.week === value.week
+            && prevVal.month === value.month
+            && prevVal.month3 === value.month3
+            && prevVal.month6 === value.month6
+            && prevVal.year1 === value.year1
+          ) {
+            return prev;
+          }
+          return { ...prev, [code]: value };
+        });
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [periodReturnsEnabled, data]);
 
   const columnWidthMap = useMemo(() => {
     const visibleNonNameIds = mobileColumnOrder.filter((id) => mobileColumnVisibility[id] !== false);
@@ -514,15 +720,15 @@ export default function MobileFundTable({
     MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
       allVisible[id] = true;
     });
-    allVisible.relatedSector = false;
     setMobileColumnVisibility(allVisible);
   };
   const handleToggleMobileColumnVisibility = (columnId, visible) => {
     setMobileColumnVisibility((prev = {}) => ({ ...prev, [columnId]: visible }));
   };
 
-  // 移动端名称列：无拖拽把手，长按整行触发排序；点击名称可打开底部卡片弹框（需传入 getFundCardProps）
-  // 当 isNameSortMode 且 sortBy==='default' 时，左侧显示排序/拖拽图标，可拖动行排序
+  const isCustomGroupTab = Boolean(currentTab && currentTab !== 'all' && currentTab !== 'fav');
+
+  // 移动端名称列：默认排序下长按整行进入批量删除；名称排序模式下左侧为拖拽把手
   const MobileFundNameCell = ({ info, showFullFundName, onOpenCardSheet, isNameSortMode: nameSortMode, sortBy: currentSortBy }) => {
     const original = info.row.original || {};
     const code = original.code;
@@ -531,9 +737,72 @@ export default function MobileFundTable({
     const hasHoldingAmount = original.holdingAmountValue != null;
     const holdingAmountDisplay = hasHoldingAmount ? (original.holdingAmount ?? '—') : null;
     const isFavorites = favorites?.has?.(code);
-    const isGroupTab = currentTab && currentTab !== 'all' && currentTab !== 'fav';
+    const isGroupTab = isCustomGroupTab;
     const rowSortable = useContext(RowSortableContext);
     const showDragHandle = nameSortMode && currentSortBy === 'default' && rowSortable;
+    const bulkSelected = code ? bulkSelectedCodes.has(code) : false;
+
+    if (isBulkDeleteMode) {
+      return (
+        <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              width: 26,
+              height: 26,
+              marginRight: 4,
+              cursor: 'pointer',
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              checked={bulkSelected}
+              onChange={() => {
+                if (!code) return;
+                setBulkSelectedCodes((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(code)) next.delete(code);
+                  else next.add(code);
+                  return next;
+                });
+              }}
+              style={{
+                width: 18,
+                height: 18,
+                accentColor: 'var(--primary)',
+                cursor: 'pointer',
+              }}
+            />
+          </label>
+          <div className="title-text">
+            <span
+              className={`name-text ${showFullFundName ? 'show-full' : ''}`}
+              title={isUpdated ? '今日净值已更新' : undefined}
+            >
+              {info.getValue() ?? '—'}
+            </span>
+            {holdingAmountDisplay ? (
+              <span className="muted code-text">
+                {masked ? <span className="mask-text">******</span> : holdingAmountDisplay}
+                {hasDca && <span className="dca-indicator">定</span>}
+                {isUpdated && <span className="updated-indicator">✓</span>}
+              </span>
+            ) : code ? (
+              <span className="muted code-text">
+                #{code}
+                {hasDca && <span className="dca-indicator">定</span>}
+                {isUpdated && <span className="updated-indicator">✓</span>}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
 
     return (
       <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -550,15 +819,27 @@ export default function MobileFundTable({
           </span>
         ) : isGroupTab ? (
           <button
-            className="icon-button fav-button"
+            type="button"
+            className="icon-button"
             onClick={(e) => {
               e.stopPropagation?.();
-              onRemoveFromGroupRef.current?.(original);
+              if (refreshing) return;
+              onRemoveFundRef.current?.(original);
             }}
-            title="从当前分组移除"
-            style={{ backgroundColor: 'transparent'}}
+            title="删除"
+            disabled={refreshing}
+            style={{
+              backgroundColor: 'transparent',
+              flexShrink: 0,
+              opacity: refreshing ? 0.55 : 1,
+              cursor: refreshing ? 'not-allowed' : 'pointer',
+              border: 'none',
+              height: 26,
+              width: 26,
+              marginRight: 4
+            }}
           >
-            <ExitIcon width="18" height="18" style={{ transform: 'rotate(180deg)' }} />
+            <TrashIcon width="18" height="18" />
           </button>
         ) : (
           <button
@@ -650,57 +931,129 @@ export default function MobileFundTable({
       {
         accessorKey: 'fundName',
         header: () => (
-          <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-            <span>基金名称</span>
-            <button
-              type="button"
-              className="icon-button"
-              onClick={(e) => {
-                e.stopPropagation?.();
-                setSettingModalOpen(true);
-              }}
-              title="个性化设置"
+          isBulkDeleteMode ? (
+            <div
               style={{
-                border: 'none',
-                width: '28px',
-                height: '28px',
-                minWidth: '28px',
-                backgroundColor: 'transparent',
-                color: 'var(--text)',
-                flexShrink: 0,
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
+                justifyContent: 'flex-start',
+                width: '100%',
+                gap: 6,
+                flexWrap: 'nowrap',
+                minWidth: 0,
               }}
             >
-              <SettingsIcon width="18" height="18" />
-            </button>
-            {sortBy === 'default' && (
               <button
                 type="button"
-                className={`icon-button ${isNameSortMode ? 'active' : ''}`}
+                className="icon-button"
+                disabled={bulkSelectedCodes.size === 0 || refreshing}
                 onClick={(e) => {
                   e.stopPropagation?.();
-                  setIsNameSortMode((prev) => !prev);
+                  if (bulkSelectedCodes.size === 0 || refreshing) return;
+                  setBulkDeleteConfirmOpen(true);
                 }}
-                title={isNameSortMode ? '退出排序' : '拖动排序'}
+                title="批量删除"
                 style={{
                   border: 'none',
                   width: '28px',
                   height: '28px',
                   minWidth: '28px',
                   backgroundColor: 'transparent',
-                  color: isNameSortMode ? 'var(--primary)' : 'var(--text)',
+                  color: bulkSelectedCodes.size === 0 || refreshing ? 'var(--muted)' : 'var(--danger)',
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  opacity: bulkSelectedCodes.size === 0 || refreshing ? 0.45 : 1,
+                  cursor: bulkSelectedCodes.size === 0 || refreshing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <TrashIcon width="18" height="18" />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={(e) => {
+                  e.stopPropagation?.();
+                  exitBulkDeleteMode();
+                }}
+                title="取消"
+                aria-label="取消批量删除"
+                style={{
+                  border: 'none',
+                  padding: '0 4px',
+                  minHeight: '28px',
+                  minWidth: 0,
+                  flex: '1 1 0%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text)',
+                }}
+              >
+                <CloseIcon width="20" height="20" />
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={(e) => {
+                  e.stopPropagation?.();
+                  setSettingModalOpen(true);
+                }}
+                title="个性化设置"
+                style={{
+                  border: 'none',
+                  width: '28px',
+                  height: '28px',
+                  minWidth: '28px',
+                  backgroundColor: 'transparent',
+                  color: 'var(--text)',
                   flexShrink: 0,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
               >
-                <SortIcon width="18" height="18" />
+                <SettingsIcon width="18" height="18" />
               </button>
-            )}
-          </div>
+              {sortBy === 'default' && (
+                <button
+                  type="button"
+                  className={`icon-button ${isNameSortMode ? 'active' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    setIsNameSortMode((prev) => {
+                      const next = !prev;
+                      if (next) {
+                        setIsBulkDeleteMode(false);
+                        setBulkSelectedCodes(new Set());
+                      }
+                      return next;
+                    });
+                  }}
+                  title={isNameSortMode ? '退出排序' : '拖动排序'}
+                  style={{
+                    border: 'none',
+                    width: '28px',
+                    height: '28px',
+                    minWidth: '28px',
+                    backgroundColor: 'transparent',
+                    color: isNameSortMode ? 'var(--primary)' : 'var(--text)',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <SortIcon width="18" height="18" />
+                </button>
+              )}
+            </div>
+          )
         ),
         cell: (info) => (
           <MobileFundNameCell
@@ -721,13 +1074,146 @@ export default function MobileFundTable({
           const code = original.code;
           const value = (code && (relatedSectorByCode?.[code] ?? relatedSectorCacheRef.current.get(code))) || '';
           const display = value || '—';
+          const labelKey = value ? String(value).trim() : '';
+          const quote = labelKey ? sectorQuoteByLabel?.[labelKey] : null;
+          const nameFromQuote = quote?.name != null ? String(quote.name).trim() : '';
+          const firstLine = nameFromQuote || display;
+          const pct = quote?.pct;
+          const pctText = pct != null ? `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%` : null;
+          const pctCls = pct != null ? (pct > 0 ? 'up' : pct < 0 ? 'down' : '') : '';
           return (
-            <div style={{ width: '100%', textAlign: value ? 'left' : 'right', fontSize: '12px' }}>
-              {display}
+            <div
+              style={{
+                width: '100%',
+                minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                gap: 2,
+              }}
+            >
+              <span
+                title={firstLine !== '—' ? firstLine : undefined}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  textAlign: 'right',
+                  fontSize: '12px',
+                }}
+              >
+                {firstLine}
+              </span>
+              {pctText != null ? (
+                <span
+                  className={pctCls}
+                  style={{ fontSize: '10px', fontWeight: 600, textAlign: 'right' }}
+                >
+                  {pctText}
+                </span>
+              ) : null}
             </div>
           );
         },
-        meta: { align: 'left', cellClassName: 'related-sector-cell', width: columnWidthMap.relatedSector ?? 120 },
+        meta: { align: 'right', cellClassName: 'related-sector-cell', width: columnWidthMap.relatedSector ?? 120 },
+      },
+      {
+        id: 'period1w',
+        header: '近1周',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.week : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <span className={cls} style={{ fontWeight: 700 }}>{text}</span>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1w ?? 72 },
+      },
+      {
+        id: 'period1m',
+        header: '近1月',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <span className={cls} style={{ fontWeight: 700 }}>{text}</span>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1m ?? 72 },
+      },
+      {
+        id: 'period3m',
+        header: '近3月',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month3 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <span className={cls} style={{ fontWeight: 700 }}>{text}</span>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period3m ?? 72 },
+      },
+      {
+        id: 'period6m',
+        header: '近6月',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.month6 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <span className={cls} style={{ fontWeight: 700 }}>{text}</span>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period6m ?? 72 },
+      },
+      {
+        id: 'period1y',
+        header: '近1年',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const code = original.code;
+          const value = code ? periodReturnsByCode[code]?.year1 : null;
+          const cls = value > 0 ? 'up' : value < 0 ? 'down' : '';
+          const text = value != null && Number.isFinite(value)
+            ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
+            : '—';
+          return (
+            <div style={{ textAlign: 'right' }}>
+              <span className={cls} style={{ fontWeight: 700 }}>{text}</span>
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1y ?? 72 },
       },
       {
         accessorKey: 'latestNav',
@@ -776,7 +1262,7 @@ export default function MobileFundTable({
       },
       {
         accessorKey: 'yesterdayChangePercent',
-        header: '昨日涨幅',
+        header: '最新涨幅',
         cell: (info) => {
           const original = info.row.original || {};
           const value = original.yesterdayChangeValue;
@@ -796,7 +1282,7 @@ export default function MobileFundTable({
       },
       {
         accessorKey: 'estimateChangePercent',
-        header: '估值涨幅',
+        header: '估算涨幅',
         cell: (info) => {
           const original = info.row.original || {};
           const value = original.estimateChangeValue;
@@ -850,6 +1336,23 @@ export default function MobileFundTable({
         meta: { align: 'right', cellClassName: 'total-change-cell', width: columnWidthMap.totalChangePercent },
       },
       {
+        accessorKey: 'holdingDays',
+        header: '持有天数',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const value = original.holdingDaysValue;
+          if (value == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+            <div style={{ fontWeight: 700, textAlign: 'right' }}>
+              {value}
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'holding-days-cell', width: columnWidthMap.holdingDays ?? 64 },
+      },
+      {
         accessorKey: 'todayProfit',
         header: '当日收益',
         cell: (info) => {
@@ -859,7 +1362,6 @@ export default function MobileFundTable({
           const cls = hasProfit ? (value > 0 ? 'up' : value < 0 ? 'down' : '') : 'muted';
           const amountStr = hasProfit ? (info.getValue() ?? '') : '—';
           const percentStr = original.todayProfitPercent ?? '';
-          const isUpdated = original.isUpdated;
           return (
             <div style={{ width: '100%' }}>
               <span className={cls} style={{ display: 'block', width: '100%', fontWeight: 700 }}>
@@ -867,7 +1369,7 @@ export default function MobileFundTable({
                   {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
                 </FitText>
               </span>
-              {percentStr && !isUpdated && !masked ? (
+              {percentStr && !masked ? (
                 <span className={`${cls} today-profit-percent`} style={{ display: 'block', width: '100%', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
                   <FitText maxFontSize={11} minFontSize={9}>
                     {percentStr}
@@ -878,6 +1380,39 @@ export default function MobileFundTable({
           );
         },
         meta: { align: 'right', cellClassName: 'profit-cell', width: columnWidthMap.todayProfit },
+      },
+      {
+        accessorKey: 'yesterdayProfit',
+        header: '昨日收益',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const value = original.yesterdayProfitValue;
+          const hasProfit = value != null;
+          const cls = hasProfit ? (value > 0 ? 'up' : value < 0 ? 'down' : '') : 'muted';
+          const amountStr = hasProfit ? (info.getValue() ?? '') : '—';
+          const percentStr = original.yesterdayProfitPercent ?? '';
+          const pctVal = original.yesterdaySecondLinePctValue;
+          const pctCls = pctVal != null && Number.isFinite(pctVal)
+            ? (pctVal > 0 ? 'up' : pctVal < 0 ? 'down' : '')
+            : 'muted';
+          return (
+            <div style={{ width: '100%' }}>
+              <span className={cls} style={{ display: 'block', width: '100%', fontWeight: 700 }}>
+                <FitText maxFontSize={14} minFontSize={10}>
+                  {masked && hasProfit ? <span className="mask-text">******</span> : amountStr}
+                </FitText>
+              </span>
+              {percentStr && !masked ? (
+                <span className={`${pctCls} yesterday-profit-percent`} style={{ display: 'block', width: '100%', fontSize: '0.75em', opacity: 0.9, fontWeight: 500 }}>
+                  <FitText maxFontSize={11} minFontSize={9}>
+                    {percentStr}
+                  </FitText>
+                </span>
+              ) : null}
+            </div>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'yesterday-profit-cell', width: columnWidthMap.yesterdayProfit ?? 80 },
       },
       {
         accessorKey: 'holdingProfit',
@@ -909,7 +1444,22 @@ export default function MobileFundTable({
         meta: { align: 'right', cellClassName: 'holding-cell', width: columnWidthMap.holdingProfit },
       },
     ],
-    [currentTab, favorites, refreshing, columnWidthMap, showFullFundName, getFundCardProps, isNameSortMode, sortBy, relatedSectorByCode]
+    [
+      currentTab,
+      favorites,
+      refreshing,
+      columnWidthMap,
+      showFullFundName,
+      getFundCardProps,
+      isNameSortMode,
+      sortBy,
+      relatedSectorByCode,
+      sectorQuoteByLabel,
+      periodReturnsByCode,
+      isBulkDeleteMode,
+      bulkSelectedCodes,
+      exitBulkDeleteMode,
+    ]
   );
 
   const table = useReactTable({
@@ -1020,7 +1570,7 @@ export default function MobileFundTable({
 
   const getAlignClass = (columnId) => {
     if (columnId === 'fundName') return '';
-    if (['latestNav', 'estimateNav', 'yesterdayChangePercent', 'estimateChangePercent', 'totalChangePercent', 'todayProfit', 'holdingProfit'].includes(columnId)) return 'text-right';
+    if (['latestNav', 'estimateNav', 'yesterdayChangePercent', 'estimateChangePercent', 'totalChangePercent', 'holdingDays', 'todayProfit', 'yesterdayProfit', 'holdingProfit', 'period1w', 'period1m', 'period3m', 'period6m', 'period1y'].includes(columnId)) return 'text-right';
     return 'text-right';
   };
 
@@ -1093,20 +1643,69 @@ export default function MobileFundTable({
                       key={row.original.code || row.id}
                       row={row}
                       isTableDragging={!!activeId}
-                      disabled={sortBy !== 'default'}
+                      disabled={sortBy !== 'default' || isBulkDeleteMode}
                     >
-                      {(setActivatorNodeRef, listeners) => (
+                      {() => (
                         <div
-                          ref={sortBy === 'default' && !isNameSortMode ? setActivatorNodeRef : undefined}
                           className="table-row"
                           style={{
                             background: index % 2 === 0 ? 'var(--bg)' : 'var(--table-row-alt-bg)',
                             position: 'relative',
                             zIndex: 1,
+                            WebkitUserSelect: 'none',
+                            userSelect: 'none',
+                            WebkitTouchCallout: 'none',
+                            touchAction: isBulkDeleteMode ? 'auto' : 'pan-x pan-y',
                             ...(mobileGridLayout.gridTemplateColumns ? { gridTemplateColumns: mobileGridLayout.gridTemplateColumns } : {}),
                           }}
-                          onClick={isNameSortMode ? () => setIsNameSortMode(false) : undefined}
-                          {...(sortBy === 'default' && !isNameSortMode ? listeners : {})}
+                          onContextMenu={(e) => e.preventDefault()}
+                          onDragStart={(e) => e.preventDefault()}
+                          onClick={() => {
+                            if (isBulkDeleteMode) {
+                              if (ignoreNextBulkRowClickRef.current) {
+                                ignoreNextBulkRowClickRef.current = false;
+                                return;
+                              }
+                              const c = row.original?.code;
+                              if (!c) return;
+                              setBulkSelectedCodes((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(c)) next.delete(c);
+                                else next.add(c);
+                                return next;
+                              });
+                              return;
+                            }
+                            if (isNameSortMode) setIsNameSortMode(false);
+                          }}
+                          onPointerDown={(e) => {
+                            if (sortBy !== 'default' || isNameSortMode || isBulkDeleteMode || refreshing) return;
+                            if (e.button !== 0 && e.pointerType === 'mouse') return;
+                            const c = row.original?.code;
+                            if (!c) return;
+                            bulkLongPressRef.current.startX = e.clientX;
+                            bulkLongPressRef.current.startY = e.clientY;
+                            clearBulkLongPressTimer();
+                            bulkLongPressRef.current.timer = setTimeout(() => {
+                              bulkLongPressRef.current.timer = null;
+                              ignoreNextBulkRowClickRef.current = true;
+                              try {
+                                const sel = typeof window !== 'undefined' && window.getSelection?.();
+                                if (sel?.removeAllRanges) sel.removeAllRanges();
+                              } catch { /* empty */ }
+                              setIsNameSortMode(false);
+                              setIsBulkDeleteMode(true);
+                              setBulkSelectedCodes(new Set([c]));
+                            }, 550);
+                          }}
+                          onPointerMove={(e) => {
+                            if (!bulkLongPressRef.current.timer) return;
+                            const dx = Math.abs(e.clientX - bulkLongPressRef.current.startX);
+                            const dy = Math.abs(e.clientY - bulkLongPressRef.current.startY);
+                            if (dx > 12 || dy > 12) clearBulkLongPressTimer();
+                          }}
+                          onPointerUp={clearBulkLongPressTimer}
+                          onPointerCancel={clearBulkLongPressTimer}
                         >
                           {row.getVisibleCells().map((cell, cellIndex) => {
                             const columnId = cell.column.id;
@@ -1171,13 +1770,36 @@ export default function MobileFundTable({
         <MobileFundCardDrawer
           open={!!(cardSheetRow && getFundCardProps)}
           onOpenChange={(open) => { if (!open) setCardSheetRow(null); }}
-          blockDrawerClose={blockDrawerClose}
+          blockDrawerClose={blockDrawerClose || bulkDeleteConfirmOpen}
           ignoreNextDrawerCloseRef={ignoreNextDrawerCloseRef}
           cardSheetRow={cardSheetRow}
-          getFundCardProps={getFundCardProps}
+          getFundCardProps={getFundCardPropsWithRelatedSector}
         />
 
         {!onlyShowHeader && showPortalHeader && ReactDOM.createPortal(renderContent(true), document.body)}
+
+        {!onlyShowHeader && bulkDeleteConfirmOpen && (
+          <ConfirmModal
+            title="批量删除"
+            message={
+              isCustomGroupTab
+                ? `确定从当前分组中移除已选的 ${bulkSelectedCodes.size} 支基金吗？将清除这些基金在本分组内的持仓与相关记录，不会在「全部」中删除。`
+                : `确定删除已选的 ${bulkSelectedCodes.size} 支基金吗？将从列表中移除这些基金及其全部持仓与相关数据。`
+            }
+            confirmText="确定删除"
+            onConfirm={() => {
+              const items = Array.from(bulkSelectedCodes)
+                .map((code) => {
+                  const r = data.find((d) => d.code === code);
+                  return r ? { code: r.code, name: r.fundName } : { code };
+                })
+                .filter((x) => x.code);
+              onBulkRemoveFundsConfirmed?.(items);
+              exitBulkDeleteMode();
+            }}
+            onCancel={() => setBulkDeleteConfirmOpen(false)}
+          />
+        )}
       </div>
     );
   };

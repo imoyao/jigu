@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v19';
+const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v22';
 
 export default function Announcement() {
   const [isVisible, setIsVisible] = useState(false);
@@ -75,16 +75,15 @@ export default function Announcement() {
               <span>公告</span>
             </div>
             <div style={{ color: 'var(--text)', lineHeight: '1.6', fontSize: '15px', overflowY: 'auto', minHeight: 0, flex: 1, paddingRight: '4px' }}>
-              <p>v0.2.8 更新内容：</p>
-              <p>1. 增加关联板块列。</p>
-              <p>2. 设置持仓支持今日首次买入。</p>
-              <p>3. 加仓自动获取费率。</p>
+              <p>v1.0.1 更新内容如下：</p>
+              <p>1. 移动底部导航栏动态显隐。</p>
+              <p>2. 当日收益计算方式完善。</p>
+              <p>3. 自定义分组交易记录数据问题。</p>
+              <p>4. PC端分组左右滑动问题。</p>
+              <p>5. 恢复自定义分组添加全部分组的基金到此分组。</p>
               <br/>
-              <p>下一版本更新内容:</p>
-              <p>1. 关联板块实时估值。</p>
-              <p>2. 收益曲线。</p>
-              <p>3. 估值差异列。</p>
-              <p>如有建议和问题，欢迎进用户支持群反馈。</p>
+              <p>感谢上月以下用户对本项目赞助支持（排名不分先后）。</p>
+              <p>y*w、s*、*李、l*r、钱程似锦、Y*u、*子、F、陈*n、z*g、小坏、*.、*枫、*z、aqara、Aimer、*L、**赛、**文、*彬</p>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
