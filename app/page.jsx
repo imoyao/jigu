@@ -6447,6 +6447,8 @@ export default function HomePage() {
                         relatedSectorSessionKey={user?.id ?? ''}
                         refreshing={refreshing}
                         currentTab={currentTab}
+                        groups={groups}
+                        onMoveFunds={handleMoveFunds}
                         favorites={favorites}
                         sortBy={sortBy}
                         stickyTop={navbarHeight + filterBarHeight + marketIndexAccordionHeight}

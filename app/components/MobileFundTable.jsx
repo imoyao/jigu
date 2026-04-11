@@ -28,8 +28,12 @@ import FitText from './FitText';
 import MobileFundCardDrawer from './MobileFundCardDrawer';
 import MobileSettingModal from './MobileSettingModal';
 import ConfirmModal from './ConfirmModal';
-import { CloseIcon, DragIcon, SettingsIcon, SortIcon, StarIcon, TrashIcon } from './Icons';
+import MoveGroupModal from './MoveGroupModal';
+import { CloseIcon, DragIcon, FolderPlusIcon, PencilIcon, SettingsIcon, StarIcon, TrashIcon } from './Icons';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
+
+const EDIT_MOVE_TO_FRONT_COL = 'editMoveToFront';
+const EDIT_DRAG_COL = 'editDrag';
 
 const MOBILE_NON_FROZEN_COLUMN_IDS = [
   'relatedSector',
@@ -67,6 +71,184 @@ const MOBILE_COLUMN_HEADERS = {
 };
 
 const RowSortableContext = createContext(null);
+
+function EditDragHandleCell({ disabled }) {
+  const rowSortable = useContext(RowSortableContext);
+  const setActivatorRef = useCallback(
+    (node) => {
+      rowSortable?.setActivatorNodeRef?.(node);
+    },
+    [rowSortable],
+  );
+  if (!rowSortable) return null;
+  return (
+    <span
+      ref={setActivatorRef}
+      className="icon-button fav-button"
+      title="拖动排序"
+      style={{
+        backgroundColor: 'transparent',
+        touchAction: 'none',
+        cursor: disabled ? 'not-allowed' : 'grab',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: disabled ? 0.45 : 1,
+      }}
+      onClick={(e) => e.stopPropagation()}
+      {...(disabled ? {} : rowSortable.listeners)}
+    >
+      <DragIcon width="18" height="18" />
+    </span>
+  );
+}
+
+/** 编辑模式表头：与 PcFundTable BatchRemoveHeader 一致（全选 / 已选 / 清空 + 移动分组 + 批量删除 + 完成） */
+function MobileEditBatchHeader({
+  totalCount,
+  selectedCount,
+  checked,
+  indeterminate,
+  onToggleAll,
+  onMove,
+  onRemove,
+  onClose,
+  hasMoveFunds,
+  refreshing,
+}) {
+  const checkboxRef = useRef(null);
+  useEffect(() => {
+    if (checkboxRef.current) checkboxRef.current.indeterminate = !!indeterminate;
+  }, [indeterminate]);
+
+  const actionsDisabled = refreshing || selectedCount === 0;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        width: '100%',
+        gap: 8,
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          minWidth: 0,
+          flex: '1 1 auto',
+          overflow: 'hidden',
+          marginLeft: '5px'
+        }}
+      >
+        <label
+          title={checked ? '取消全选' : '全选'}
+          onClick={(e) => e.stopPropagation?.()}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}
+        >
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            checked={!!checked}
+            onChange={(e) => onToggleAll?.(e.target.checked)}
+            onClick={(e) => e.stopPropagation?.()}
+            style={{ width: 14, height: 14, accentColor: 'var(--primary)', cursor: 'pointer' }}
+            aria-label="全选"
+          />
+          <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+            已选 {selectedCount}/{totalCount}
+          </span>
+        </label>
+      </div>
+
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {hasMoveFunds ? (
+          <button
+            type="button"
+            className="icon-button"
+            onClick={(e) => {
+              e.stopPropagation?.();
+              onMove?.();
+            }}
+            title="移动分组"
+            disabled={!!actionsDisabled}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '0 6px',
+              height: 28,
+              minHeight: 28,
+              width: 'auto',
+              opacity: actionsDisabled ? 0.6 : 1,
+              cursor: actionsDisabled ? 'not-allowed' : 'pointer',
+              backgroundColor: 'transparent',
+              border: 'none',
+              color: 'var(--primary)',
+            }}
+          >
+            <FolderPlusIcon width="17" height="17" />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="icon-button"
+          onClick={(e) => {
+            e.stopPropagation?.();
+            onRemove?.();
+          }}
+          title="批量删除"
+          disabled={!!actionsDisabled}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '0 6px',
+            height: 28,
+            minHeight: 28,
+            width: 'auto',
+            opacity: actionsDisabled ? 0.6 : 1,
+            cursor: actionsDisabled ? 'not-allowed' : 'pointer',
+            backgroundColor: 'transparent',
+            border: 'none',
+            color: 'var(--danger)',
+          }}
+        >
+          <TrashIcon width="17" height="17" />
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          onClick={(e) => {
+            e.stopPropagation?.();
+            onClose?.();
+          }}
+          title="完成"
+          aria-label="退出编辑"
+          style={{
+            border: 'none',
+            height: 28,
+            minHeight: 28,
+            width: 28,
+            minWidth: 28,
+            padding: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'transparent',
+            color: 'var(--text)',
+          }}
+        >
+          <CloseIcon width="18" height="18" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SortableRow({ row, children, isTableDragging, disabled }) {
   const {
@@ -115,12 +297,14 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {(row: any) => void} [props.onToggleFavorite] - 添加/取消自选
  * @param {(row: any, meta: { hasHolding: boolean }) => void} [props.onHoldingAmountClick] - 点击持仓金额
  * @param {boolean} [props.refreshing] - 是否刷新中
- * @param {string} [props.sortBy] - 排序方式，'default' 时长按行触发拖拽排序
- * @param {(oldIndex: number, newIndex: number) => void} [props.onReorder] - 拖拽排序回调
+ * @param {string} [props.sortBy] - 排序方式，'default' 时可长按行进入编辑模式并在编辑态拖动排序
+ * @param {(oldIndex: number, newIndex: number) => void} [props.onReorder] - 编辑模式下「拖动」列排序回调
  * @param {(row: any) => Object} [props.getFundCardProps] - 给定行返回 FundCard 的 props；传入后点击基金名称将用底部弹框展示卡片视图
  * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
  * @param {string} [props.relatedSectorSessionKey] - 登录用户 id（未登录传空），用于关联板块查询缓存与登录后重新拉取
  * @param {(items: { code: string; name?: string }[]) => void} [props.onBulkRemoveFundsConfirmed] - 批量删除二次确认后执行（与单条删除作用域一致）
+ * @param {Array<{ id: string; name?: string; codes?: string[] }>} [props.groups] - 自定义分组列表（移动分组弹框用）
+ * @param {(payload: { codes: string[]; fromTab: string; targetId: string; dryRun?: boolean; overwrite?: boolean }) => Promise<{ conflicts?: string[] }|void>} [props.onMoveFunds] - 批量迁移分组（与 PC 一致）
  * @param {(open: boolean) => void} [props.onFundCardDrawerOpenChange] - 基金详情底部 Drawer 打开/关闭时通知父级（用于隐藏底栏等）
  * @param {(open: boolean) => void} [props.onMobileSettingModalOpenChange] - 移动端表格「个性化设置」弹框打开/关闭时通知父级（用于隐藏底栏等）
  */
@@ -128,6 +312,8 @@ export default function MobileFundTable({
   data = [],
   onRemoveFund,
   currentTab,
+  groups = [],
+  onMoveFunds,
   favorites = new Set(),
   onToggleFavorite,
   onHoldingAmountClick,
@@ -146,34 +332,66 @@ export default function MobileFundTable({
   onFundCardDrawerOpenChange,
   onMobileSettingModalOpenChange,
 }) {
-  const [isNameSortMode, setIsNameSortMode] = useState(false);
-  const [isBulkDeleteMode, setIsBulkDeleteMode] = useState(false);
-  const [bulkSelectedCodes, setBulkSelectedCodes] = useState(() => new Set());
-  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editSelectedCodes, setEditSelectedCodes] = useState(() => new Set());
+  const [bulkRemoveConfirmOpen, setBulkRemoveConfirmOpen] = useState(false);
+  const [moveGroupOpen, setMoveGroupOpen] = useState(false);
 
-  const bulkLongPressRef = useRef({ timer: null, startX: 0, startY: 0 });
-  const ignoreNextBulkRowClickRef = useRef(false);
+  const editLongPressRef = useRef({ timer: null, startX: 0, startY: 0 });
 
-  const clearBulkLongPressTimer = useCallback(() => {
-    if (bulkLongPressRef.current.timer) {
-      clearTimeout(bulkLongPressRef.current.timer);
-      bulkLongPressRef.current.timer = null;
+  const selectableCodes = useMemo(
+    () => (Array.isArray(data) ? data.map((d) => d?.code).filter(Boolean) : []),
+    [data],
+  );
+
+  const editSelectedCodesList = useMemo(() => Array.from(editSelectedCodes || []), [editSelectedCodes]);
+
+  const clearEditLongPressTimer = useCallback(() => {
+    if (editLongPressRef.current.timer) {
+      clearTimeout(editLongPressRef.current.timer);
+      editLongPressRef.current.timer = null;
     }
   }, []);
 
-  const exitBulkDeleteMode = useCallback(() => {
-    clearBulkLongPressTimer();
-    setIsBulkDeleteMode(false);
-    setBulkSelectedCodes(new Set());
-    setBulkDeleteConfirmOpen(false);
-  }, [clearBulkLongPressTimer]);
+  const exitEditMode = useCallback(() => {
+    clearEditLongPressTimer();
+    setIsEditMode(false);
+    setEditSelectedCodes(new Set());
+    setBulkRemoveConfirmOpen(false);
+    setMoveGroupOpen(false);
+  }, [clearEditLongPressTimer]);
 
-  useEffect(() => () => clearBulkLongPressTimer(), [clearBulkLongPressTimer]);
+  useEffect(() => {
+    setEditSelectedCodes(new Set());
+  }, [currentTab]);
 
-  // 排序模式下拖拽手柄无需长按，直接拖动即可；非排序模式长按整行触发拖拽
+  useEffect(() => {
+    setEditSelectedCodes((prev) => {
+      if (!prev?.size) return prev;
+      const allowed = new Set(selectableCodes);
+      let changed = false;
+      const next = new Set();
+      for (const c of prev) {
+        if (allowed.has(c)) next.add(c);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [selectableCodes]);
+
+  const setAllEditSelected = useCallback((nextChecked) => {
+    setEditSelectedCodes(() => {
+      if (!nextChecked) return new Set();
+      return new Set(selectableCodes);
+    });
+  }, [selectableCodes]);
+
+  useEffect(() => () => clearEditLongPressTimer(), [clearEditLongPressTimer]);
+
+  // 编辑模式下「拖动」列无需长按即可拖动；非编辑模式长按整行进入编辑
   const sensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: isNameSortMode ? { delay: 0, tolerance: 5 } : { delay: 400, tolerance: 5 },
+      activationConstraint: isEditMode ? { delay: 0, tolerance: 5 } : { delay: 400, tolerance: 5 },
     }),
     useSensor(KeyboardSensor)
   );
@@ -357,20 +575,8 @@ export default function MobileFundTable({
   }, [settingModalOpen, onMobileSettingModalOpenChange]);
 
   useEffect(() => {
-    if (sortBy !== 'default') setIsNameSortMode(false);
-  }, [sortBy]);
-
-  useEffect(() => {
-    if (sortBy !== 'default') exitBulkDeleteMode();
-  }, [sortBy, exitBulkDeleteMode]);
-
-  // 排序模式下，点击页面任意区域（含表格外）退出排序；使用冒泡阶段，避免先于排序按钮处理
-  useEffect(() => {
-    if (!isNameSortMode) return;
-    const onDocClick = () => setIsNameSortMode(false);
-    document.addEventListener('click', onDocClick);
-    return () => document.removeEventListener('click', onDocClick);
-  }, [isNameSortMode]);
+    if (sortBy !== 'default') exitEditMode();
+  }, [sortBy, exitEditMode]);
 
   const [cardSheetRow, setCardSheetRow] = useState(null);
 
@@ -511,6 +717,8 @@ export default function MobileFundTable({
   const LAST_COLUMN_EXTRA = 12;
   const FALLBACK_WIDTHS = {
     fundName: 140,
+    [EDIT_MOVE_TO_FRONT_COL]: 72,
+    [EDIT_DRAG_COL]: 72,
     relatedSector: 120,
     period1w: 72,
     period1m: 72,
@@ -698,19 +906,46 @@ export default function MobileFundTable({
   const columnWidthMap = useMemo(() => {
     const visibleNonNameIds = mobileColumnOrder.filter((id) => mobileColumnVisibility[id] !== false);
     const nonNameCount = visibleNonNameIds.length;
+
+    const mapWithEditAndData = (fundNameWidth, w) => {
+      const map = {
+        fundName: fundNameWidth,
+        [EDIT_MOVE_TO_FRONT_COL]: w,
+        [EDIT_DRAG_COL]: w,
+      };
+      MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
+        map[id] = w;
+      });
+      return map;
+    };
+
+    if (isEditMode && tableContainerWidth > 0) {
+      let fundNameWidth = NAME_CELL_WIDTH;
+      if (nonNameCount >= 3) {
+        const remainingThree = tableContainerWidth - NAME_CELL_WIDTH - 3 * GAP - LAST_COLUMN_EXTRA;
+        const widthOfOneInThreeLayout = Math.max(48, Math.floor(remainingThree / 3));
+        fundNameWidth = NAME_CELL_WIDTH + widthOfOneInThreeLayout;
+      }
+      const gapTotal = 2 * GAP;
+      const remaining = tableContainerWidth - fundNameWidth - gapTotal - LAST_COLUMN_EXTRA;
+      const w = Math.max(48, Math.floor(remaining / 2));
+      return mapWithEditAndData(fundNameWidth, w);
+    }
+
     if (tableContainerWidth > 0 && nonNameCount > 0) {
-      const gapTotal = nonNameCount >= 3 ? 3 * GAP : (nonNameCount) * GAP;
+      const gapTotal = nonNameCount >= 3 ? 3 * GAP : nonNameCount * GAP;
       const remaining = tableContainerWidth - NAME_CELL_WIDTH - gapTotal - LAST_COLUMN_EXTRA;
       const divisor = nonNameCount >= 3 ? 3 : nonNameCount;
       const otherColumnWidth = Math.max(48, Math.floor(remaining / divisor));
-      const map = { fundName: NAME_CELL_WIDTH };
-      MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
-        map[id] = otherColumnWidth;
-      });
-      return map;
+      return mapWithEditAndData(NAME_CELL_WIDTH, otherColumnWidth);
+    }
+
+    if (isEditMode && nonNameCount >= 3) {
+      const w = FALLBACK_WIDTHS.relatedSector;
+      return { ...FALLBACK_WIDTHS, fundName: NAME_CELL_WIDTH + w };
     }
     return { ...FALLBACK_WIDTHS };
-  }, [tableContainerWidth, mobileColumnOrder, mobileColumnVisibility]);
+  }, [tableContainerWidth, mobileColumnOrder, mobileColumnVisibility, isEditMode]);
 
   const handleResetMobileColumnOrder = () => {
     setMobileColumnOrder([...MOBILE_NON_FROZEN_COLUMN_IDS]);
@@ -728,8 +963,8 @@ export default function MobileFundTable({
 
   const isCustomGroupTab = Boolean(currentTab && currentTab !== 'all' && currentTab !== 'fav');
 
-  // 移动端名称列：默认排序下长按整行进入批量删除；名称排序模式下左侧为拖拽把手
-  const MobileFundNameCell = ({ info, showFullFundName, onOpenCardSheet, isNameSortMode: nameSortMode, sortBy: currentSortBy }) => {
+  // 移动端名称列：默认排序下长按整行进入编辑模式
+  const MobileFundNameCell = ({ info, showFullFundName, onOpenCardSheet }) => {
     const original = info.row.original || {};
     const code = original.code;
     const isUpdated = original.isUpdated;
@@ -738,11 +973,9 @@ export default function MobileFundTable({
     const holdingAmountDisplay = hasHoldingAmount ? (original.holdingAmount ?? '—') : null;
     const isFavorites = favorites?.has?.(code);
     const isGroupTab = isCustomGroupTab;
-    const rowSortable = useContext(RowSortableContext);
-    const showDragHandle = nameSortMode && currentSortBy === 'default' && rowSortable;
-    const bulkSelected = code ? bulkSelectedCodes.has(code) : false;
+    const editSelected = code ? editSelectedCodes.has(code) : false;
 
-    if (isBulkDeleteMode) {
+    if (isEditMode) {
       return (
         <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <label
@@ -761,10 +994,10 @@ export default function MobileFundTable({
           >
             <input
               type="checkbox"
-              checked={bulkSelected}
+              checked={editSelected}
               onChange={() => {
                 if (!code) return;
-                setBulkSelectedCodes((prev) => {
+                setEditSelectedCodes((prev) => {
                   const next = new Set(prev);
                   if (next.has(code)) next.delete(code);
                   else next.add(code);
@@ -806,18 +1039,7 @@ export default function MobileFundTable({
 
     return (
       <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {showDragHandle ? (
-          <span
-            ref={rowSortable.setActivatorNodeRef}
-            className="icon-button fav-button"
-            title="拖动排序"
-            style={{ backgroundColor: 'transparent', touchAction: 'none', cursor: 'grab', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            onClick={(e) => e.stopPropagation()}
-            {...rowSortable.listeners}
-          >
-            <DragIcon width="18" height="18" />
-          </span>
-        ) : isGroupTab ? (
+        {isGroupTab ? (
           <button
             type="button"
             className="icon-button"
@@ -930,73 +1152,35 @@ export default function MobileFundTable({
     () => [
       {
         accessorKey: 'fundName',
-        header: () => (
-          isBulkDeleteMode ? (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'flex-start',
-                width: '100%',
-                gap: 6,
-                flexWrap: 'nowrap',
-                minWidth: 0,
-              }}
-            >
-              <button
-                type="button"
-                className="icon-button"
-                disabled={bulkSelectedCodes.size === 0 || refreshing}
-                onClick={(e) => {
-                  e.stopPropagation?.();
-                  if (bulkSelectedCodes.size === 0 || refreshing) return;
-                  setBulkDeleteConfirmOpen(true);
+        header: () => {
+          if (isEditMode) {
+            const allCount = selectableCodes.length;
+            const selectedCount = editSelectedCodes.size;
+            const checked = allCount > 0 && selectedCount === allCount;
+            const indeterminate = selectedCount > 0 && selectedCount < allCount;
+            return (
+              <MobileEditBatchHeader
+                totalCount={allCount}
+                selectedCount={selectedCount}
+                checked={checked}
+                indeterminate={indeterminate}
+                onToggleAll={setAllEditSelected}
+                onMove={() => {
+                  if (!onMoveFunds || selectedCount === 0) return;
+                  setMoveGroupOpen(true);
                 }}
-                title="批量删除"
-                style={{
-                  border: 'none',
-                  width: '28px',
-                  height: '28px',
-                  minWidth: '28px',
-                  backgroundColor: 'transparent',
-                  color: bulkSelectedCodes.size === 0 || refreshing ? 'var(--muted)' : 'var(--danger)',
-                  flexShrink: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: bulkSelectedCodes.size === 0 || refreshing ? 0.45 : 1,
-                  cursor: bulkSelectedCodes.size === 0 || refreshing ? 'not-allowed' : 'pointer',
+                onRemove={() => {
+                  if (selectedCount === 0 || refreshing) return;
+                  setBulkRemoveConfirmOpen(true);
                 }}
-              >
-                <TrashIcon width="18" height="18" />
-              </button>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={(e) => {
-                  e.stopPropagation?.();
-                  exitBulkDeleteMode();
-                }}
-                title="取消"
-                aria-label="取消批量删除"
-                style={{
-                  border: 'none',
-                  padding: '0 4px',
-                  minHeight: '28px',
-                  minWidth: 0,
-                  flex: '1 1 0%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  backgroundColor: 'transparent',
-                  color: 'var(--text)',
-                }}
-              >
-                <CloseIcon width="20" height="20" />
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                onClose={exitEditMode}
+                hasMoveFunds={!!onMoveFunds}
+                refreshing={refreshing}
+              />
+            );
+          }
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: 6 }}>
               <button
                 type="button"
                 className="icon-button"
@@ -1023,48 +1207,92 @@ export default function MobileFundTable({
               {sortBy === 'default' && (
                 <button
                   type="button"
-                  className={`icon-button ${isNameSortMode ? 'active' : ''}`}
+                  className="icon-button"
+                  disabled={refreshing}
                   onClick={(e) => {
                     e.stopPropagation?.();
-                    setIsNameSortMode((prev) => {
-                      const next = !prev;
-                      if (next) {
-                        setIsBulkDeleteMode(false);
-                        setBulkSelectedCodes(new Set());
-                      }
-                      return next;
-                    });
+                    if (refreshing) return;
+                    clearEditLongPressTimer();
+                    setIsEditMode(true);
+                    setEditSelectedCodes(new Set());
                   }}
-                  title={isNameSortMode ? '退出排序' : '拖动排序'}
+                  title="编辑"
+                  aria-label="编辑"
                   style={{
                     border: 'none',
                     width: '28px',
                     height: '28px',
                     minWidth: '28px',
                     backgroundColor: 'transparent',
-                    color: isNameSortMode ? 'var(--primary)' : 'var(--text)',
+                    color: refreshing ? 'var(--muted)' : 'var(--text)',
                     flexShrink: 0,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    opacity: refreshing ? 0.45 : 1,
+                    cursor: refreshing ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  <SortIcon width="18" height="18" />
+                  <PencilIcon width="18" height="18" />
                 </button>
               )}
             </div>
-          )
-        ),
+          );
+        },
         cell: (info) => (
           <MobileFundNameCell
             info={info}
             showFullFundName={showFullFundName}
             onOpenCardSheet={getFundCardProps ? (row) => setCardSheetRow(row) : undefined}
-            isNameSortMode={isNameSortMode}
-            sortBy={sortBy}
           />
         ),
         meta: { align: 'left', cellClassName: 'name-cell', width: columnWidthMap.fundName },
+      },
+      {
+        id: EDIT_MOVE_TO_FRONT_COL,
+        header: '移到最前',
+        cell: (info) => {
+          const code = info.row.original?.code;
+          const idx = code ? data.findIndex((d) => d.code === code) : -1;
+          const canMove = sortBy === 'default' && idx > 0 && onReorder;
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+              <button
+                type="button"
+                className="link-button"
+                disabled={!canMove || refreshing}
+                title={idx <= 0 ? '已在最前' : '移到最前'}
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '4px 6px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: canMove && !refreshing ? 'var(--primary)' : 'var(--muted)',
+                  cursor: !canMove || refreshing ? 'not-allowed' : 'pointer',
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!canMove || refreshing) return;
+                  onReorder(idx, 0);
+                }}
+              >
+                置顶
+              </button>
+            </div>
+          );
+        },
+        meta: { align: 'center', cellClassName: 'mobile-edit-action-cell', width: columnWidthMap[EDIT_MOVE_TO_FRONT_COL] },
+      },
+      {
+        id: EDIT_DRAG_COL,
+        header: '拖动',
+        cell: () => (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+            <EditDragHandleCell disabled={sortBy !== 'default' || refreshing} />
+          </div>
+        ),
+        meta: { align: 'center', cellClassName: 'mobile-edit-action-cell', width: columnWidthMap[EDIT_DRAG_COL] },
       },
       {
         id: 'relatedSector',
@@ -1451,28 +1679,55 @@ export default function MobileFundTable({
       columnWidthMap,
       showFullFundName,
       getFundCardProps,
-      isNameSortMode,
       sortBy,
       relatedSectorByCode,
       sectorQuoteByLabel,
       periodReturnsByCode,
-      isBulkDeleteMode,
-      bulkSelectedCodes,
-      exitBulkDeleteMode,
+      isEditMode,
+      editSelectedCodes,
+      exitEditMode,
+      onMoveFunds,
+      clearEditLongPressTimer,
+      masked,
+      onReorder,
+      data,
+      selectableCodes,
+      setAllEditSelected,
     ]
   );
+
+  const tableColumnOrder = useMemo(
+    () => (isEditMode ? ['fundName', EDIT_MOVE_TO_FRONT_COL, EDIT_DRAG_COL] : ['fundName', ...mobileColumnOrder]),
+    [isEditMode, mobileColumnOrder],
+  );
+
+  const tableColumnVisibility = useMemo(() => {
+    const dataVis = {};
+    MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
+      dataVis[id] = isEditMode ? false : mobileColumnVisibility[id] !== false;
+    });
+    return {
+      fundName: true,
+      [EDIT_MOVE_TO_FRONT_COL]: isEditMode,
+      [EDIT_DRAG_COL]: isEditMode,
+      ...dataVis,
+    };
+  }, [isEditMode, mobileColumnVisibility]);
 
   const table = useReactTable({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
     state: {
-      columnOrder: ['fundName', ...mobileColumnOrder],
-      columnVisibility: { fundName: true, ...mobileColumnVisibility },
+      columnOrder: tableColumnOrder,
+      columnVisibility: tableColumnVisibility,
     },
     onColumnOrderChange: (updater) => {
+      if (isEditMode) return;
       const next = typeof updater === 'function' ? updater(['fundName', ...mobileColumnOrder]) : updater;
-      const newNonFrozen = next.filter((id) => id !== 'fundName');
+      const newNonFrozen = next.filter(
+        (id) => id !== 'fundName' && id !== EDIT_MOVE_TO_FRONT_COL && id !== EDIT_DRAG_COL,
+      );
       if (newNonFrozen.length) {
         setMobileColumnOrder(newNonFrozen);
       }
@@ -1481,6 +1736,8 @@ export default function MobileFundTable({
       const next = typeof updater === 'function' ? updater({ fundName: true, ...mobileColumnVisibility }) : updater;
       const rest = { ...next };
       delete rest.fundName;
+      delete rest[EDIT_MOVE_TO_FRONT_COL];
+      delete rest[EDIT_DRAG_COL];
       setMobileColumnVisibility(rest);
     },
     initialState: {
@@ -1515,7 +1772,7 @@ export default function MobileFundTable({
       positions.push(acc);
     }
     snapPositionsRef.current = positions;
-  }, [headerGroup?.headers?.length, columnWidthMap, mobileColumnOrder]);
+  }, [headerGroup?.headers?.length, columnWidthMap, mobileColumnOrder, isEditMode]);
 
   useEffect(() => {
     const el = tableContainerRef.current;
@@ -1570,6 +1827,7 @@ export default function MobileFundTable({
 
   const getAlignClass = (columnId) => {
     if (columnId === 'fundName') return '';
+    if (columnId === EDIT_MOVE_TO_FRONT_COL || columnId === EDIT_DRAG_COL) return 'text-center';
     if (['latestNav', 'estimateNav', 'yesterdayChangePercent', 'estimateChangePercent', 'totalChangePercent', 'holdingDays', 'todayProfit', 'yesterdayProfit', 'holdingProfit', 'period1w', 'period1m', 'period3m', 'period6m', 'period1y'].includes(columnId)) return 'text-right';
     return 'text-right';
   };
@@ -1643,7 +1901,7 @@ export default function MobileFundTable({
                       key={row.original.code || row.id}
                       row={row}
                       isTableDragging={!!activeId}
-                      disabled={sortBy !== 'default' || isBulkDeleteMode}
+                      disabled={sortBy !== 'default' || !isEditMode}
                     >
                       {() => (
                         <div
@@ -1655,57 +1913,37 @@ export default function MobileFundTable({
                             WebkitUserSelect: 'none',
                             userSelect: 'none',
                             WebkitTouchCallout: 'none',
-                            touchAction: isBulkDeleteMode ? 'auto' : 'pan-x pan-y',
+                            touchAction: isEditMode ? 'auto' : 'pan-x pan-y',
                             ...(mobileGridLayout.gridTemplateColumns ? { gridTemplateColumns: mobileGridLayout.gridTemplateColumns } : {}),
                           }}
                           onContextMenu={(e) => e.preventDefault()}
                           onDragStart={(e) => e.preventDefault()}
-                          onClick={() => {
-                            if (isBulkDeleteMode) {
-                              if (ignoreNextBulkRowClickRef.current) {
-                                ignoreNextBulkRowClickRef.current = false;
-                                return;
-                              }
-                              const c = row.original?.code;
-                              if (!c) return;
-                              setBulkSelectedCodes((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(c)) next.delete(c);
-                                else next.add(c);
-                                return next;
-                              });
-                              return;
-                            }
-                            if (isNameSortMode) setIsNameSortMode(false);
-                          }}
                           onPointerDown={(e) => {
-                            if (sortBy !== 'default' || isNameSortMode || isBulkDeleteMode || refreshing) return;
+                            if (sortBy !== 'default' || isEditMode || refreshing) return;
                             if (e.button !== 0 && e.pointerType === 'mouse') return;
                             const c = row.original?.code;
                             if (!c) return;
-                            bulkLongPressRef.current.startX = e.clientX;
-                            bulkLongPressRef.current.startY = e.clientY;
-                            clearBulkLongPressTimer();
-                            bulkLongPressRef.current.timer = setTimeout(() => {
-                              bulkLongPressRef.current.timer = null;
-                              ignoreNextBulkRowClickRef.current = true;
+                            editLongPressRef.current.startX = e.clientX;
+                            editLongPressRef.current.startY = e.clientY;
+                            clearEditLongPressTimer();
+                            editLongPressRef.current.timer = setTimeout(() => {
+                              editLongPressRef.current.timer = null;
                               try {
                                 const sel = typeof window !== 'undefined' && window.getSelection?.();
                                 if (sel?.removeAllRanges) sel.removeAllRanges();
                               } catch { /* empty */ }
-                              setIsNameSortMode(false);
-                              setIsBulkDeleteMode(true);
-                              setBulkSelectedCodes(new Set([c]));
+                              setIsEditMode(true);
+                              setEditSelectedCodes(new Set([c]));
                             }, 550);
                           }}
                           onPointerMove={(e) => {
-                            if (!bulkLongPressRef.current.timer) return;
-                            const dx = Math.abs(e.clientX - bulkLongPressRef.current.startX);
-                            const dy = Math.abs(e.clientY - bulkLongPressRef.current.startY);
-                            if (dx > 12 || dy > 12) clearBulkLongPressTimer();
+                            if (!editLongPressRef.current.timer) return;
+                            const dx = Math.abs(e.clientX - editLongPressRef.current.startX);
+                            const dy = Math.abs(e.clientY - editLongPressRef.current.startY);
+                            if (dx > 12 || dy > 12) clearEditLongPressTimer();
                           }}
-                          onPointerUp={clearBulkLongPressTimer}
-                          onPointerCancel={clearBulkLongPressTimer}
+                          onPointerUp={clearEditLongPressTimer}
+                          onPointerCancel={clearEditLongPressTimer}
                         >
                           {row.getVisibleCells().map((cell, cellIndex) => {
                             const columnId = cell.column.id;
@@ -1770,7 +2008,7 @@ export default function MobileFundTable({
         <MobileFundCardDrawer
           open={!!(cardSheetRow && getFundCardProps)}
           onOpenChange={(open) => { if (!open) setCardSheetRow(null); }}
-          blockDrawerClose={blockDrawerClose || bulkDeleteConfirmOpen}
+          blockDrawerClose={blockDrawerClose || bulkRemoveConfirmOpen || moveGroupOpen}
           ignoreNextDrawerCloseRef={ignoreNextDrawerCloseRef}
           cardSheetRow={cardSheetRow}
           getFundCardProps={getFundCardPropsWithRelatedSector}
@@ -1778,26 +2016,43 @@ export default function MobileFundTable({
 
         {!onlyShowHeader && showPortalHeader && ReactDOM.createPortal(renderContent(true), document.body)}
 
-        {!onlyShowHeader && bulkDeleteConfirmOpen && (
+        {!onlyShowHeader && bulkRemoveConfirmOpen && (
           <ConfirmModal
             title="批量删除"
             message={
               isCustomGroupTab
-                ? `确定从当前分组中移除已选的 ${bulkSelectedCodes.size} 支基金吗？将清除这些基金在本分组内的持仓与相关记录，不会在「全部」中删除。`
-                : `确定删除已选的 ${bulkSelectedCodes.size} 支基金吗？将从列表中移除这些基金及其全部持仓与相关数据。`
+                ? `确定从当前分组中移除已选的 ${editSelectedCodes.size} 支基金吗？将清除这些基金在本分组内的持仓与相关记录，不会在「全部」中删除。`
+                : `确定删除已选的 ${editSelectedCodes.size} 支基金吗？将从列表中移除这些基金及其全部持仓与相关数据。`
             }
             confirmText="确定删除"
             onConfirm={() => {
-              const items = Array.from(bulkSelectedCodes)
+              const items = Array.from(editSelectedCodes)
                 .map((code) => {
                   const r = data.find((d) => d.code === code);
                   return r ? { code: r.code, name: r.fundName } : { code };
                 })
                 .filter((x) => x.code);
               onBulkRemoveFundsConfirmed?.(items);
-              exitBulkDeleteMode();
+              exitEditMode();
             }}
-            onCancel={() => setBulkDeleteConfirmOpen(false)}
+            onCancel={() => setBulkRemoveConfirmOpen(false)}
+          />
+        )}
+
+        {!onlyShowHeader && moveGroupOpen && (
+          <MoveGroupModal
+            open={moveGroupOpen}
+            onClose={() => setMoveGroupOpen(false)}
+            fromTab={currentTab}
+            groups={groups}
+            selectedCodes={editSelectedCodesList}
+            disabled={refreshing || editSelectedCodes.size === 0}
+            onMoveFunds={async (payload) => {
+              const res = await onMoveFunds?.(payload);
+              if (payload?.dryRun) return res;
+              setEditSelectedCodes(new Set());
+              return res;
+            }}
           />
         )}
       </div>
