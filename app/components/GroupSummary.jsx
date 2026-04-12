@@ -67,13 +67,15 @@ export default function GroupSummary({
   holdings,
   groupName,
   getProfit,
+  /** 与内部 summary 同结构；传入时顶部汇总数字以此为准（如汇总 Tab 下全局+分组双账本合计） */
+  summaryTotalsOverride = null,
   stickyTop,
   isSticky = false,
   onToggleSticky,
   masked,
   onToggleMasked,
   marketIndexAccordionHeight,
-  navbarHeight
+  navbarHeight,
 }) {
   const [showPercent, setShowPercent] = useState(true);
   const [showTodayPercent, setShowTodayPercent] = useState(false);
@@ -117,7 +119,7 @@ export default function GroupSummary({
     }
   }, [masked]);
 
-  const summary = useMemo(() => {
+  const derivedSummary = useMemo(() => {
     let totalAsset = 0;
     let totalProfitToday = 0;
     let totalHoldingReturn = 0;
@@ -162,6 +164,19 @@ export default function GroupSummary({
       hasAnyTodayData,
     };
   }, [funds, holdings, getProfit]);
+
+  const summary =
+    summaryTotalsOverride != null && typeof summaryTotalsOverride === 'object'
+      ? {
+          totalAsset: summaryTotalsOverride.totalAsset,
+          totalProfitToday: summaryTotalsOverride.totalProfitToday,
+          totalHoldingReturn: summaryTotalsOverride.totalHoldingReturn,
+          hasHolding: summaryTotalsOverride.hasHolding,
+          returnRate: summaryTotalsOverride.returnRate,
+          todayReturnRate: summaryTotalsOverride.todayReturnRate,
+          hasAnyTodayData: summaryTotalsOverride.hasAnyTodayData,
+        }
+      : derivedSummary;
 
   useLayoutEffect(() => {
     const el = rowRef.current;

@@ -25,6 +25,7 @@ import Announcement from "./components/Announcement";
 import EmptyStateCard from "./components/EmptyStateCard";
 import FundCard from "./components/FundCard";
 import GroupSummary from "./components/GroupSummary";
+import GroupAccountSummaryCard from "./components/GroupAccountSummaryCard";
 import {
   CloseIcon,
   EyeIcon,
@@ -113,6 +114,10 @@ const formatDate = (input) => toTz(input).format('YYYY-MM-DD');
 
 /** 定投计划分桶：全局与其它自定义分组 */
 const DCA_SCOPE_GLOBAL = '__global__';
+/** 虚拟 Tab：多分组有持仓时的汇总视图（非真实分组 id） */
+const SUMMARY_TAB_ID = '__portfolio_groups_summary__';
+/** 汇总合并持仓映射中：表示该笔展示来自「全部」全局持仓（非真实分组 id） */
+const SUMMARY_SOURCE_GLOBAL = '__portfolio_summary_global__';
 const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
 function cloneHoldingDeep(src) {
@@ -722,13 +727,18 @@ export default function HomePage() {
   }, []);
 
   const activeGroupId =
-    currentTab !== 'all' && currentTab !== 'fav' && groups.some((g) => g.id === currentTab)
+    currentTab !== 'all' &&
+    currentTab !== 'fav' &&
+    currentTab !== SUMMARY_TAB_ID &&
+    groups.some((g) => g.id === currentTab)
       ? currentTab
       : null;
 
-  // 计算持仓收益
-  const getHoldingProfit = useCallback((fund, holding) => {
+  // 计算持仓收益；可选第三参为分组作用域（汇总卡片/合并列表按分组计算当日收益）
+  const getHoldingProfit = useCallback((fund, holding, scopeGroupIdOverride) => {
     if (!holding || !isNumber(holding.share)) return null;
+
+    const txScope = scopeGroupIdOverride !== undefined ? scopeGroupIdOverride : activeGroupId;
 
     const hasTodayData = fund.jzrq === todayStr;
     const hasTodayValuation = isString(fund.gztime) && fund.gztime.startsWith(todayStr);
@@ -750,8 +760,8 @@ export default function HomePage() {
       for (const tx of list) {
         if (!tx || tx.date !== todayStr) continue;
         const gid = tx.groupId || null;
-        if (activeGroupId) {
-          if (gid !== activeGroupId) continue;
+        if (txScope) {
+          if (gid !== txScope) continue;
         } else {
           if (gid) continue;
         }
@@ -829,6 +839,304 @@ export default function HomePage() {
       profitTotal
     };
   }, [isTradingDay, todayStr, transactions, activeGroupId]);
+
+  const groupsWithHoldings = useMemo(() => {
+    const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+    return (groups || []).filter((g) => {
+      if (!g?.id || !Array.isArray(g.codes)) return false;
+      const bucket = groupHoldings[g.id] || {};
+      return g.codes.some((code) => {
+        const fund = fundByCode.get(code);
+        const h = bucket[code];
+        if (!fund || !h) return false;
+        const p = getHoldingProfit(fund, h, g.id);
+        return p && Number.isFinite(p.amount) && p.amount > 0;
+      });
+    });
+  }, [groups, groupHoldings, funds, getHoldingProfit]);
+
+  /** 「全部」全局 + 各自定义分组账本，逐笔累加（同一基金可同时计入全局与分组） */
+  const summaryTabPortfolioTotals = useMemo(() => {
+    const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+    let totalAsset = 0;
+    let totalProfitToday = 0;
+    let totalHoldingReturn = 0;
+    let totalCost = 0;
+    let hasHolding = false;
+    let hasAnyTodayData = false;
+
+    const accumulate = (fund, holding, scopeGid) => {
+      if (!fund || !holding) return;
+      const p = getHoldingProfit(fund, holding, scopeGid);
+      if (!p || !Number.isFinite(p.amount) || p.amount <= 0) return;
+      hasHolding = true;
+      totalAsset += Math.round(p.amount * 100) / 100;
+      if (p.profitToday != null) {
+        totalProfitToday += p.profitToday;
+        hasAnyTodayData = true;
+      }
+      if (p.profitTotal != null) {
+        totalHoldingReturn += p.profitTotal;
+        if (typeof holding.cost === 'number' && typeof holding.share === 'number') {
+          totalCost += holding.cost * holding.share;
+        }
+      }
+    };
+
+    Object.entries(holdings || {}).forEach(([code, h]) => {
+      accumulate(fundByCode.get(code), h, null);
+    });
+    (groups || []).forEach((g) => {
+      if (!g?.id) return;
+      const bucket = groupHoldings[g.id] || {};
+      Object.entries(bucket).forEach(([code, h]) => {
+        accumulate(fundByCode.get(code), h, g.id);
+      });
+    });
+
+    const roundedTotalProfitToday = Math.round(totalProfitToday * 100) / 100;
+    const returnRate = totalCost > 0 ? (totalHoldingReturn / totalCost) * 100 : 0;
+    const todayReturnRate = totalCost > 0 ? (roundedTotalProfitToday / totalCost) * 100 : 0;
+
+    return {
+      totalAsset,
+      totalProfitToday: roundedTotalProfitToday,
+      totalHoldingReturn,
+      hasHolding,
+      returnRate,
+      todayReturnRate,
+      hasAnyTodayData,
+    };
+  }, [funds, holdings, groupHoldings, groups, getHoldingProfit]);
+
+  const hasGlobalPortfolioForSummary = useMemo(() => {
+    const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+    return Object.entries(holdings || {}).some(([code, h]) => {
+      const fund = fundByCode.get(code);
+      if (!fund || !h) return false;
+      const p = getHoldingProfit(fund, h, null);
+      return p && Number.isFinite(p.amount) && p.amount > 0;
+    });
+  }, [funds, holdings, getHoldingProfit]);
+
+  const showPortfolioSummaryTab = summaryTabPortfolioTotals.hasHolding;
+
+  const { summaryMergedHoldings, summaryHoldingSourceGroupByCode } = useMemo(() => {
+    const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+    const merged = {};
+    const sourceByCode = {};
+    const codes = new Set();
+    Object.entries(holdings || {}).forEach(([code, h]) => {
+      const fund = fundByCode.get(code);
+      if (!fund || !h) return;
+      const p = getHoldingProfit(fund, h, null);
+      if (p && Number.isFinite(p.amount) && p.amount > 0) codes.add(code);
+    });
+    for (const g of groupsWithHoldings) {
+      for (const c of g.codes || []) codes.add(c);
+    }
+    for (const code of codes) {
+      const fund = fundByCode.get(code);
+      if (!fund) continue;
+      let bestAmt = -Infinity;
+      let bestH = null;
+      let bestGid = null;
+      const globalH = holdings[code];
+      if (globalH) {
+        const p = getHoldingProfit(fund, globalH, null);
+        const amt = p?.amount;
+        if (Number.isFinite(amt) && amt > bestAmt) {
+          bestAmt = amt;
+          bestH = globalH;
+          bestGid = SUMMARY_SOURCE_GLOBAL;
+        }
+      }
+      for (const g of groupsWithHoldings) {
+        const h = groupHoldings[g.id]?.[code];
+        if (!h) continue;
+        const p = getHoldingProfit(fund, h, g.id);
+        const amt = p?.amount;
+        if (!Number.isFinite(amt)) continue;
+        if (amt > bestAmt) {
+          bestAmt = amt;
+          bestH = h;
+          bestGid = g.id;
+        }
+      }
+      if (bestH != null && bestGid != null) {
+        merged[code] = bestH;
+        sourceByCode[code] = bestGid;
+      }
+    }
+    return { summaryMergedHoldings: merged, summaryHoldingSourceGroupByCode: sourceByCode };
+  }, [groupsWithHoldings, groupHoldings, funds, getHoldingProfit, holdings]);
+
+  useEffect(() => {
+    if (currentTab === SUMMARY_TAB_ID && !summaryTabPortfolioTotals.hasHolding) {
+      setCurrentTab('all');
+    }
+  }, [currentTab, summaryTabPortfolioTotals.hasHolding]);
+
+  const summaryCardItems = useMemo(() => {
+    if (currentTab !== SUMMARY_TAB_ID) return [];
+    const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+    const items = [];
+
+    if (hasGlobalPortfolioForSummary) {
+      let totalAsset = 0;
+      let totalHoldingReturn = 0;
+      let totalCost = 0;
+      let totalProfitToday = 0;
+      let hasAnyTodayData = false;
+      let upCount = 0;
+      let downCount = 0;
+
+      for (const fund of funds || []) {
+        const holding = holdings[fund.code];
+        if (!holding) continue;
+        const profit = getHoldingProfit(fund, holding, null);
+        if (!profit) continue;
+        totalAsset += Math.round(profit.amount * 100) / 100;
+        if (profit.profitToday != null) {
+          totalProfitToday += profit.profitToday;
+          hasAnyTodayData = true;
+        }
+        if (profit.profitTotal !== null) {
+          totalHoldingReturn += profit.profitTotal;
+          if (typeof holding.cost === 'number' && typeof holding.share === 'number') {
+            totalCost += holding.cost * holding.share;
+          }
+        }
+        const ev = fund.noValuation
+          ? null
+          : fund.estPricedCoverage > 0.05
+            ? (isNumber(fund.estGszzl) ? Number(fund.estGszzl) : null)
+            : (isNumber(fund.gszzl) ? Number(fund.gszzl) : null);
+        if (ev != null && Number.isFinite(ev)) {
+          if (ev > 0) upCount += 1;
+          else if (ev < 0) downCount += 1;
+        }
+      }
+
+      const roundedToday = Math.round(totalProfitToday * 100) / 100;
+      const returnRate = totalCost > 0 ? (totalHoldingReturn / totalCost) * 100 : 0;
+      const todayReturnRate = totalCost > 0 ? (roundedToday / totalCost) * 100 : 0;
+      const scopeDaily = isPlainObject(fundDailyEarnings?.[DAILY_EARNINGS_SCOPE_ALL])
+        ? fundDailyEarnings[DAILY_EARNINGS_SCOPE_ALL]
+        : {};
+      const dailySeries = aggregatePortfolioDailyEarnings(scopeDaily);
+      let cum = 0;
+      const sparkSeries = dailySeries.map((pt) => {
+        cum += pt.earnings;
+        return { date: pt.date, earnings: cum };
+      });
+
+      items.push({
+        groupId: SUMMARY_SOURCE_GLOBAL,
+        groupName: '全部',
+        totalAsset,
+        holdingReturn: totalHoldingReturn,
+        holdingReturnPercent: returnRate,
+        accountReturn: roundedToday,
+        accountReturnPercent: todayReturnRate,
+        hasAnyTodayData,
+        upCount,
+        downCount,
+        sparkSeries,
+      });
+    }
+
+    items.push(
+      ...groupsWithHoldings.map((g) => {
+      const bucket = groupHoldings[g.id] || {};
+      const groupFunds = (funds || []).filter((f) => g.codes.includes(f.code));
+      let totalAsset = 0;
+      let totalHoldingReturn = 0;
+      let totalCost = 0;
+      let totalProfitToday = 0;
+      let hasAnyTodayData = false;
+      let upCount = 0;
+      let downCount = 0;
+
+      for (const fund of groupFunds) {
+        const holding = bucket[fund.code];
+        const profit = getHoldingProfit(fund, holding, g.id);
+        if (profit) {
+          totalAsset += Math.round(profit.amount * 100) / 100;
+          if (profit.profitToday != null) {
+            totalProfitToday += profit.profitToday;
+            hasAnyTodayData = true;
+          }
+          if (profit.profitTotal !== null) {
+            totalHoldingReturn += profit.profitTotal;
+            if (holding && typeof holding.cost === 'number' && typeof holding.share === 'number') {
+              totalCost += holding.cost * holding.share;
+            }
+          }
+        }
+        const ev = fund.noValuation
+          ? null
+          : fund.estPricedCoverage > 0.05
+            ? (isNumber(fund.estGszzl) ? Number(fund.estGszzl) : null)
+            : (isNumber(fund.gszzl) ? Number(fund.gszzl) : null);
+        if (ev != null && Number.isFinite(ev)) {
+          if (ev > 0) upCount += 1;
+          else if (ev < 0) downCount += 1;
+        }
+      }
+
+      const roundedToday = Math.round(totalProfitToday * 100) / 100;
+      const returnRate = totalCost > 0 ? (totalHoldingReturn / totalCost) * 100 : 0;
+      const todayReturnRate = totalCost > 0 ? (roundedToday / totalCost) * 100 : 0;
+
+      const scopeDaily = isPlainObject(fundDailyEarnings?.[g.id]) ? fundDailyEarnings[g.id] : {};
+      const dailySeries = aggregatePortfolioDailyEarnings(scopeDaily);
+      let cum = 0;
+      const sparkSeries = dailySeries.map((pt) => {
+        cum += pt.earnings;
+        return { date: pt.date, earnings: cum };
+      });
+
+      return {
+        groupId: g.id,
+        groupName: g.name || '分组',
+        totalAsset,
+        holdingReturn: totalHoldingReturn,
+        holdingReturnPercent: returnRate,
+        accountReturn: roundedToday,
+        accountReturnPercent: todayReturnRate,
+        hasAnyTodayData,
+        upCount,
+        downCount,
+        sparkSeries,
+      };
+      })
+    );
+    return items;
+  }, [
+    currentTab,
+    groupsWithHoldings,
+    funds,
+    groupHoldings,
+    holdings,
+    getHoldingProfit,
+    fundDailyEarnings,
+    hasGlobalPortfolioForSummary,
+  ]);
+
+  const getHoldingProfitForTab = useCallback(
+    (fund, holding) => {
+      if (currentTab === SUMMARY_TAB_ID) {
+        const src = summaryHoldingSourceGroupByCode[fund?.code];
+        if (src === undefined) return null;
+        const scopeGid = src === SUMMARY_SOURCE_GLOBAL ? null : src;
+        return getHoldingProfit(fund, holding, scopeGid);
+      }
+      return getHoldingProfit(fund, holding);
+    },
+    [currentTab, summaryHoldingSourceGroupByCode, getHoldingProfit]
+  );
+
   const dailyEarningsScope = activeGroupId || DAILY_EARNINGS_SCOPE_ALL;
   const currentFundDailyEarnings = useMemo(() => {
     if (!isPlainObject(fundDailyEarnings)) return {};
@@ -868,9 +1176,10 @@ export default function HomePage() {
   );
 
   const holdingsForTab = useMemo(() => {
+    if (currentTab === SUMMARY_TAB_ID) return summaryMergedHoldings;
     if (!activeGroupId) return holdings;
     return groupHoldings[activeGroupId] || {};
-  }, [holdings, groupHoldings, activeGroupId]);
+  }, [currentTab, summaryMergedHoldings, holdings, groupHoldings, activeGroupId]);
 
   const dcaPlansForTab = useMemo(() => {
     const scoped = migrateDcaPlansToScoped(dcaPlans);
@@ -899,11 +1208,25 @@ export default function HomePage() {
   }, [groups]);
 
   const activeGroupCodeSet = useMemo(() => {
+    if (currentTab === SUMMARY_TAB_ID) {
+      const fundByCode = new Map((funds || []).map((f) => [f.code, f]));
+      const set = new Set();
+      Object.entries(holdings || {}).forEach(([code, h]) => {
+        const fund = fundByCode.get(code);
+        if (!fund || !h) return;
+        const p = getHoldingProfit(fund, h, null);
+        if (p && Number.isFinite(p.amount) && p.amount > 0) set.add(code);
+      });
+      for (const g of groupsWithHoldings) {
+        for (const c of g.codes || []) set.add(c);
+      }
+      return set;
+    }
     if (currentTab === 'all' || currentTab === 'fav') return null;
     const group = groupById.get(currentTab);
     if (!group || !Array.isArray(group.codes)) return null;
     return new Set(group.codes);
-  }, [currentTab, groupById]);
+  }, [currentTab, groupById, groupsWithHoldings, funds, holdings, getHoldingProfit]);
 
   // 当前 tab 作用域下的基金（不包含“列表搜索”过滤）
   const scopedFunds = useMemo(() => {
@@ -930,7 +1253,7 @@ export default function HomePage() {
         });
       }
 
-      if (currentTab !== 'all' && currentTab !== 'fav' && sortBy === 'default') {
+      if (currentTab !== 'all' && currentTab !== 'fav' && currentTab !== SUMMARY_TAB_ID && sortBy === 'default') {
         const group = groups.find(g => g.id === currentTab);
         if (group && group.codes) {
           const codeMap = new Map(group.codes.map((code, index) => [code, index]));
@@ -944,7 +1267,7 @@ export default function HomePage() {
 
       const profitByCode =
         sortBy === 'holdingAmount' || sortBy === 'todayProfit' || sortBy === 'holding'
-          ? new Map(filtered.map((f) => [f.code, getHoldingProfit(f, holdingsForTab[f.code])]))
+          ? new Map(filtered.map((f) => [f.code, getHoldingProfitForTab(f, holdingsForTab[f.code])]))
           : null;
 
       return filtered.sort((a, b) => {
@@ -1027,7 +1350,7 @@ export default function HomePage() {
         return 0;
       });
     },
-    [scopedFunds, currentTab, groups, sortBy, sortOrder, holdingsForTab, getHoldingProfit, groupFundSearchTerm, shouldShowGroupFundSearch],
+    [scopedFunds, currentTab, groups, sortBy, sortOrder, holdingsForTab, getHoldingProfitForTab, groupFundSearchTerm, shouldShowGroupFundSearch],
   );
 
   const latestDailyByCode = useMemo(() => {
@@ -1087,7 +1410,7 @@ export default function HomePage() {
         const hasTodayEstimate = !f.noValuation && isString(f.gztime) && f.gztime.startsWith(todayStr);
 
         const holding = holdingsForTab[f.code];
-        const profit = getHoldingProfit(f, holding);
+        const profit = getHoldingProfitForTab(f, holding);
         const amount = profit ? profit.amount : null;
         const holdingAmount =
           amount == null ? '未设置' : `¥${amount.toFixed(2)}`;
@@ -1211,15 +1534,27 @@ export default function HomePage() {
           holdingProfit,
           holdingProfitPercent,
           holdingProfitValue,
+          holdingTargetGroupId:
+            currentTab === SUMMARY_TAB_ID ? summaryHoldingSourceGroupByCode[f.code] : undefined,
         };
       }),
-    [displayFunds, holdingsForTab, isTradingDay, todayStr, getHoldingProfit, dcaPlansForTab, latestDailyByCode],
+    [
+      displayFunds,
+      holdingsForTab,
+      isTradingDay,
+      todayStr,
+      getHoldingProfitForTab,
+      dcaPlansForTab,
+      latestDailyByCode,
+      currentTab,
+      summaryHoldingSourceGroupByCode,
+    ],
   );
 
   // 自动滚动选中 Tab 到可视区域
   useEffect(() => {
     if (!tabsRef.current) return;
-    if (currentTab === 'all') {
+    if (currentTab === 'all' || currentTab === SUMMARY_TAB_ID) {
       tabsRef.current.scrollTo({ left: 0, behavior: 'smooth' });
       return;
     }
@@ -5694,6 +6029,7 @@ export default function HomePage() {
   const getGroupName = () => {
     if (currentTab === 'all') return '全部资产';
     if (currentTab === 'fav') return '自选资产';
+    if (currentTab === SUMMARY_TAB_ID) return '汇总资产';
     const group = groups.find(g => g.id === currentTab);
     return group ? `${group.name}资产` : '分组资产';
   };
@@ -5764,7 +6100,7 @@ export default function HomePage() {
       transactions: transactionsForTab,
       theme,
       isTradingDay,
-      getHoldingProfit,
+      getHoldingProfit: getHoldingProfitForTab,
       onToggleFavorite: toggleFavorite,
       onRemoveFund: requestRemoveFund,
       onHoldingClick: openHoldingModal,
@@ -5793,7 +6129,7 @@ export default function HomePage() {
     transactionsForTab,
     theme,
     isTradingDay,
-    getHoldingProfit,
+    getHoldingProfitForTab,
     toggleFavorite,
     requestRemoveFund,
     openHoldingModal,
@@ -6233,6 +6569,20 @@ export default function HomePage() {
                   onScroll={updateTabOverflow}
                 >
                   <AnimatePresence mode="popLayout">
+                    {showPortfolioSummaryTab && (
+                      <motion.button
+                        layout
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.8 }}
+                        key="portfolio-summary"
+                        className={`tab ${currentTab === SUMMARY_TAB_ID ? 'active' : ''}`}
+                        onClick={() => setCurrentTab(SUMMARY_TAB_ID)}
+                        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                      >
+                        汇总
+                      </motion.button>
+                    )}
                     <motion.button
                       layout
                       initial={{ opacity: 0, scale: 0.8 }}
@@ -6292,7 +6642,14 @@ export default function HomePage() {
               </button>
             </div>
 
-            <div className="sort-group" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div
+              className="sort-group"
+              style={{
+                display: currentTab === SUMMARY_TAB_ID ? 'none' : 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
               <div className="view-toggle" style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', padding: '2px' }}>
                 <button
                   className={`icon-button ${viewMode === 'card' ? 'active' : ''}`}
@@ -6415,7 +6772,8 @@ export default function HomePage() {
             </div>
           </div>
 
-          {scopedFunds.length === 0 ? (
+          {scopedFunds.length === 0 &&
+          !(currentTab === SUMMARY_TAB_ID && showPortfolioSummaryTab) ? (
             <EmptyStateCard
               fundsLength={funds.length}
               currentTab={currentTab}
@@ -6427,7 +6785,10 @@ export default function HomePage() {
                   funds={displayFunds}
                   holdings={holdingsForTab}
                   groupName={getGroupName()}
-                  getProfit={getHoldingProfit}
+                  getProfit={getHoldingProfitForTab}
+                  summaryTotalsOverride={
+                    currentTab === SUMMARY_TAB_ID ? summaryTabPortfolioTotals : null
+                  }
                   stickyTop={navbarHeight + marketIndexAccordionHeight + filterBarHeight + (isMobile ? -14 : 0)}
                   isSticky={isGroupSummarySticky}
                   onToggleSticky={(next) => setIsGroupSummarySticky(next)}
@@ -6436,6 +6797,48 @@ export default function HomePage() {
                   marketIndexAccordionHeight={marketIndexAccordionHeight}
                   navbarHeight={navbarHeight}
                 />
+              {currentTab === SUMMARY_TAB_ID && summaryCardItems.length > 0 && (
+                <div
+                  className="grid"
+                  style={{
+                    marginTop: isGroupSummarySticky ? 50 : 10,
+                    gridColumn: 'span 12',
+                    gap: isMobile ? 10 : 16,
+                  }}
+                >
+                  {summaryCardItems.map((row) => (
+                    <div
+                      key={row.groupId}
+                      style={{
+                        minWidth: 0,
+                        gridColumn: isMobile ? 'span 12' : 'span 6',
+                      }}
+                    >
+                      <GroupAccountSummaryCard
+                        isMobile={isMobile}
+                        onActivate={() =>
+                          setCurrentTab(
+                            row.groupId === SUMMARY_SOURCE_GLOBAL ? 'all' : row.groupId
+                          )
+                        }
+                        groupName={row.groupName}
+                        totalAsset={row.totalAsset}
+                        holdingReturn={row.holdingReturn}
+                        holdingReturnPercent={row.holdingReturnPercent}
+                        accountReturn={row.accountReturn}
+                        accountReturnPercent={row.accountReturnPercent}
+                        hasAnyTodayData={row.hasAnyTodayData}
+                        upCount={row.upCount}
+                        downCount={row.downCount}
+                        sparkSeries={row.sparkSeries}
+                        masked={maskAmounts}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {currentTab !== SUMMARY_TAB_ID && (
+                <>
               {shouldShowGroupFundSearch && (
                 <SearchFund
                   value={groupFundSearchTerm}
@@ -6569,7 +6972,7 @@ export default function HomePage() {
                               transactions={transactionsForTab}
                               theme={theme}
                               isTradingDay={isTradingDay}
-                              getHoldingProfit={getHoldingProfit}
+                              getHoldingProfit={getHoldingProfitForTab}
                               onToggleFavorite={toggleFavorite}
                               onRemoveFund={requestRemoveFund}
                               onHoldingClick={openHoldingModal}
@@ -6588,8 +6991,10 @@ export default function HomePage() {
                 </motion.div>
               </AnimatePresence>
               )}
+                </>
+              )}
 
-              {currentTab !== 'all' && currentTab !== 'fav' && (
+              {currentTab !== 'all' && currentTab !== 'fav' && currentTab !== SUMMARY_TAB_ID && (
                 <motion.button
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
