@@ -4,6 +4,7 @@ import AnalyticsGate from './components/AnalyticsGate';
 import { Analytics } from "@vercel/analytics/next";
 import PwaRegister from './components/PwaRegister';
 import ThemeColorSync from './components/ThemeColorSync';
+import { QueryClientProviderWrapper } from './providers/query-client-provider';
 import packageJson from '../package.json';
 
 export const metadata = {
@@ -37,7 +38,7 @@ export default function RootLayout({ children }) {
       <ThemeColorSync />
       <PwaRegister />
       <AnalyticsGate GA_ID={GA_ID} />
-      {children}
+      <QueryClientProviderWrapper>{children}</QueryClientProviderWrapper>
       <Toaster />
     </body>
     </html>

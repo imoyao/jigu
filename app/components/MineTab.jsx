@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react';
 import { LoginIcon } from './Icons';
 
 export default function MineTab({
+  visible = true,
   user,
   userAvatar,
   lastSyncDisplay,
@@ -15,7 +16,11 @@ export default function MineTab({
   onSponsorSupport,
 }) {
   return (
-    <div className="mine-tab">
+    <div
+      className="mine-tab"
+      style={{ display: visible ? undefined : 'none' }}
+      aria-hidden={!visible || undefined}
+    >
       <section className="mine-profile-card glass" aria-label="个人信息">
         <div className="mine-profile-row">
           <div className="mine-profile-avatar">

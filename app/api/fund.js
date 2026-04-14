@@ -2,7 +2,8 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { isString } from 'lodash';
-import { cachedRequest, clearCachedRequest } from '../lib/cacheRequest';
+import { getQueryClient } from '../lib/get-query-client';
+import * as qk from '../lib/query-keys';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
 dayjs.extend(utc);
@@ -35,20 +36,23 @@ export const fetchRelatedSectors = async (code, { cacheTime = ONE_DAY_MS, authSe
   if (!isSupabaseConfigured) return '';
 
   const seg = authSegment != null && authSegment !== '' ? String(authSegment) : 'anon';
-  const cacheKey = `relatedSectors:${normalized}:${seg}`;
 
   try {
-    const relatedSectors = await cachedRequest(async () => {
-      const { data, error } = await supabase
-        .from('fund_related')
-        .select('related_sector')
-        .eq('fund_code', normalized)
-        .maybeSingle();
+    const relatedSectors = await getQueryClient().fetchQuery({
+      queryKey: qk.relatedSectors(normalized, seg),
+      queryFn: async () => {
+        const { data, error } = await supabase
+          .from('fund_related')
+          .select('related_sector')
+          .eq('fund_code', normalized)
+          .maybeSingle();
 
-      if (error || !data) return '';
-      const raw = data.related_sector;
-      return raw != null && raw !== '' ? String(raw).trim() : '';
-    }, cacheKey, { cacheTime });
+        if (error || !data) return '';
+        const raw = data.related_sector;
+        return raw != null && raw !== '' ? String(raw).trim() : '';
+      },
+      staleTime: cacheTime,
+    });
 
     return relatedSectors || '';
   } catch (e) {
@@ -65,18 +69,21 @@ export const fetchFundSecidByRelatedSector = async (relatedSector, { cacheTime =
   const normalized = relatedSector != null ? String(relatedSector).trim() : '';
   if (!normalized || !isSupabaseConfigured) return '';
 
-  const cacheKey = `fundSecid:${normalized}`;
   try {
-    const secid = await cachedRequest(async () => {
-      const { data, error } = await supabase
-        .from('fund_secid')
-        .select('secid')
-        .eq('related_sector', normalized)
-        .maybeSingle();
+    const secid = await getQueryClient().fetchQuery({
+      queryKey: qk.fundSecid(normalized),
+      queryFn: async () => {
+        const { data, error } = await supabase
+          .from('fund_secid')
+          .select('secid')
+          .eq('related_sector', normalized)
+          .maybeSingle();
 
-      if (error || !data?.secid) return '';
-      return String(data.secid).trim();
-    }, cacheKey, { cacheTime });
+        if (error || !data?.secid) return '';
+        return String(data.secid).trim();
+      },
+      staleTime: cacheTime,
+    });
 
     return secid || '';
   } catch (e) {
@@ -92,23 +99,26 @@ export const fetchEastmoneySectorQuote = async (secid, { cacheTime = SECTOR_QUOT
   const s = secid != null ? String(secid).trim() : '';
   if (!s || typeof fetch === 'undefined') return null;
 
-  const cacheKey = `eastSectorQuote:${s}`;
   try {
-    const quote = await cachedRequest(async () => {
-      const url = `https://push2delay.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(s)}&fields=f58,f57,f43,f170,f169,f124,f86`;
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const json = await res.json();
-      const d = json?.data;
-      if (!d) return null;
-      const f170 = d.f170;
-      const pct = f170 != null && Number.isFinite(Number(f170)) ? Number(f170) / 100 : null;
-      return {
-        name: d.f58 != null ? String(d.f58) : '',
-        code: d.f57 != null ? String(d.f57) : '',
-        pct,
-      };
-    }, cacheKey, { cacheTime });
+    const quote = await getQueryClient().fetchQuery({
+      queryKey: qk.eastSectorQuote(s),
+      queryFn: async () => {
+        const url = `https://push2delay.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(s)}&fields=f58,f57,f43,f170,f169,f124,f86`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const json = await res.json();
+        const d = json?.data;
+        if (!d) return null;
+        const f170 = d.f170;
+        const pct = f170 != null && Number.isFinite(Number(f170)) ? Number(f170) / 100 : null;
+        return {
+          name: d.f58 != null ? String(d.f58) : '',
+          code: d.f57 != null ? String(d.f57) : '',
+          pct,
+        };
+      },
+      staleTime: cacheTime,
+    });
 
     return quote || null;
   } catch (e) {
@@ -125,58 +135,68 @@ export const fetchRelatedSectorLiveQuote = async (relatedSectorLabel) => {
   return fetchEastmoneySectorQuote(secid);
 };
 
-export const loadScript = (url) => {
-  if (typeof document === 'undefined' || !document.body) return Promise.resolve(null);
-
-  let cacheKey = url;
+function normalizeEastmoneyScriptUrl(url) {
+  let key = url;
   try {
     const parsed = new URL(url);
     parsed.searchParams.delete('_');
     parsed.searchParams.delete('_t');
-    cacheKey = parsed.toString();
+    key = parsed.toString();
   } catch (e) {
   }
+  return key;
+}
 
-  const cacheTime = 10 * 60 * 1000;
+/** 东方财富 F10 / FundArchives 等 JSONP（window.apidata），不做缓存；由 loadScript / fetchQuery 控制 staleTime */
+function runEastmoneyF10ScriptForApidata(url) {
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = url;
+    script.async = true;
 
-  return cachedRequest(
-    () =>
-      new Promise((resolve) => {
-        const script = document.createElement('script');
-        script.src = url;
-        script.async = true;
+    const cleanup = () => {
+      if (document.body.contains(script)) document.body.removeChild(script);
+    };
 
-        const cleanup = () => {
-          if (document.body.contains(script)) document.body.removeChild(script);
-        };
+    script.onload = () => {
+      cleanup();
+      let apidata;
+      try {
+        apidata = window?.apidata ? JSON.parse(JSON.stringify(window.apidata)) : undefined;
+      } catch (e) {
+        apidata = window?.apidata;
+      }
+      resolve({ ok: true, apidata });
+    };
 
-        script.onload = () => {
-          cleanup();
-          let apidata;
-          try {
-            apidata = window?.apidata ? JSON.parse(JSON.stringify(window.apidata)) : undefined;
-          } catch (e) {
-            apidata = window?.apidata;
-          }
-          resolve({ ok: true, apidata });
-        };
+    script.onerror = () => {
+      cleanup();
+      resolve({ ok: false, error: '数据加载失败' });
+    };
 
-        script.onerror = () => {
-          cleanup();
-          resolve({ ok: false, error: '数据加载失败' });
-        };
-
-        document.body.appendChild(script);
-      }),
-    cacheKey,
-    { cacheTime }
-  ).then((result) => {
-    if (!result?.ok) {
-      clearCachedRequest(cacheKey);
-      throw new Error(result?.error || '数据加载失败');
-    }
-    return result.apidata;
+    document.body.appendChild(script);
   });
+}
+
+export const loadScript = (url) => {
+  if (typeof document === 'undefined' || !document.body) return Promise.resolve(null);
+
+  const norm = normalizeEastmoneyScriptUrl(url);
+  const qc = getQueryClient();
+
+  return qc
+    .fetchQuery({
+      queryKey: qk.eastmoneyScript(norm),
+      queryFn: () => runEastmoneyF10ScriptForApidata(url),
+      staleTime: 10 * 60 * 1000,
+    })
+    .then((result) => {
+      if (!result?.ok) {
+        qc.removeQueries({ queryKey: qk.eastmoneyScript(norm) });
+        throw new Error(result?.error || '数据加载失败');
+      }
+      return result.apidata;
+    });
 };
 
 export const fetchFundNetValue = async (code, date) => {
@@ -498,12 +518,17 @@ export const fetchFundData = async (c) => {
       });
       const holdingsPromise = new Promise((resolveH) => {
         const holdingsUrl = `https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code=${c}&topline=10&year=&month=&_=${Date.now()}`;
-        const holdingsCacheKey = `fund_holdings_archives_${c}`;
-        cachedRequest(
-          () => loadScript(holdingsUrl),
-          holdingsCacheKey,
-          { cacheTime: 60 * 60 * 1000 }
-        ).then(async (apidata) => {
+        getQueryClient()
+          .fetchQuery({
+            queryKey: qk.fundHoldingsArchives(c),
+            queryFn: async () => {
+              const r = await runEastmoneyF10ScriptForApidata(holdingsUrl);
+              if (!r?.ok) throw new Error(r?.error || '数据加载失败');
+              return r.apidata;
+            },
+            staleTime: 60 * 60 * 1000,
+          })
+          .then(async (apidata) => {
           let holdings = [];
           const html = apidata?.content || '';
           const holdingsReportDate = extractHoldingsReportDate(html);
@@ -656,7 +681,8 @@ export const fetchFundData = async (c) => {
             }
           }
           resolveH({ holdings, holdingsReportDate, holdingsIsLastQuarter });
-        }).catch(() => resolveH({ holdings: [], holdingsReportDate: null, holdingsIsLastQuarter: false }));
+          })
+          .catch(() => resolveH({ holdings: [], holdingsReportDate: null, holdingsIsLastQuarter: false }));
       });
       Promise.all([lsjzPromise, holdingsPromise]).then(([tData, holdingsResult]) => {
         const {
@@ -798,6 +824,19 @@ const MARKET_INDEX_KEYS = [
   { code: 'usDJI', varKey: 'v_usDJI', name: '道琼斯' },
   { code: 'hkHSI', varKey: 'v_hkHSI', name: '恒生指数' },
   { code: 'hkHSTECH', varKey: 'v_hkHSTECH', name: '恒生科技指数' },
+
+  // 行 7：欧洲三大股指
+  { code: 'gzFTSE', varKey: 'v_gzFTSE', name: '富时100' },
+  { code: 'gzFCHI', varKey: 'v_gzFCHI', name: 'CAC40' },
+  { code: 'gzGDAXI', varKey: 'v_gzGDAXI', name: '德国DAX' },
+
+  // 行 8：日本股指
+  { code: 'gzN225', varKey: 'v_gzN225', name: '日经225' },
+  { code: 'gzTPX', varKey: 'v_gzTPX', name: '东证指数' },
+
+  // 行 9：韩国股指
+  { code: 'gzKS11', varKey: 'v_gzKS11', name: '韩国综合' },
+  { code: 'gzKOSDAQ', varKey: 'v_gzKOSDAQ', name: '韩国创业板' },
 ];
 
 function parseIndexRaw(data) {
@@ -817,6 +856,23 @@ function parseIndexRaw(data) {
   };
 }
 
+function parseGlobalIndexRaw(data) {
+  if (!data || typeof data !== 'string') return null;
+  const parts = data.split('~');
+  if (parts.length < 6) return null;
+  const name = parts[1] || '';
+  const price = parseFloat(parts[3], 10);
+  const change = parseFloat(parts[4], 10);
+  const changePercent = parseFloat(parts[5], 10);
+  if (Number.isNaN(price)) return null;
+  return {
+    name,
+    price: Number.isFinite(price) ? price : 0,
+    change: Number.isFinite(change) ? change : 0,
+    changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+  };
+}
+
 export const fetchMarketIndices = async () => {
   if (typeof window === 'undefined' || typeof document === 'undefined') return [];
   return new Promise((resolve, reject) => {
@@ -824,11 +880,12 @@ export const fetchMarketIndices = async () => {
     const codes = MARKET_INDEX_KEYS.map((item) => item.code).join(',');
     script.src = `https://qt.gtimg.cn/q=${codes}&_t=${Date.now()}`;
     script.onload = () => {
-      const list = MARKET_INDEX_KEYS.map(({ name: defaultName, varKey }) => {
+      const list = MARKET_INDEX_KEYS.map(({ name: defaultName, varKey, code }) => {
         const raw = window[varKey];
-        const parsed = parseIndexRaw(raw);
+        const isGlobal = code.startsWith('gz');
+        const parsed = isGlobal ? parseGlobalIndexRaw(raw) : parseIndexRaw(raw);
         if (!parsed) return { name: defaultName, code: '', price: 0, change: 0, changePercent: 0 };
-        return { ...parsed, code: varKey.replace('v_', '') };
+        return { ...parsed, name: defaultName, code: varKey.replace('v_', '') };
       });
       if (document.body.contains(script)) document.body.removeChild(script);
       resolve(list);
@@ -983,16 +1040,17 @@ export const fetchFundPingzhongdata = async (fundCode, { cacheTime = 60 * 60 * 1
     throw new Error('无浏览器环境');
   }
 
-  const cacheKey = `pingzhongdata_${fundCode}`;
+  const qc = getQueryClient();
+  const key = qk.pingzhongdata(fundCode);
 
   try {
-    return await cachedRequest(
-      () => fetchAndParsePingzhongdata(fundCode),
-      cacheKey,
-      { cacheTime }
-    );
+    return await qc.fetchQuery({
+      queryKey: key,
+      queryFn: () => fetchAndParsePingzhongdata(fundCode),
+      staleTime: cacheTime,
+    });
   } catch (e) {
-    clearCachedRequest(cacheKey);
+    qc.removeQueries({ queryKey: key });
     throw e;
   }
 };
@@ -1132,8 +1190,8 @@ export const fetchFundHistory = async (code, range = '1m') => {
 };
 
 const API_KEYS = [
-  'sk-80bcd8ff8ef1445d9154e083e50f07f7',
-  'sk-3ac5fb4f738f042d50c4f64d0c88067f'
+  'sk-fd23ed5dde23c9238c08451fd186fd54',
+  'sk-74fe5b556be4d41afa0f5689d05e0493'
   // 添加更多 API Key 到这里
 ];
 

@@ -3948,7 +3948,6 @@ input[type="number"] {
 @media (max-width: 768px) {
   .tabs-container {
     width: 100%;
-    margin-bottom: 8px;
   }
 
   .tabs {

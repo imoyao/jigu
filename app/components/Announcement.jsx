@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v22';
+const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v25';
 
 export default function Announcement() {
   const [isVisible, setIsVisible] = useState(false);
@@ -75,15 +75,13 @@ export default function Announcement() {
               <span>公告</span>
             </div>
             <div style={{ color: 'var(--text)', lineHeight: '1.6', fontSize: '15px', overflowY: 'auto', minHeight: 0, flex: 1, paddingRight: '4px' }}>
-              <p>v1.0.1 更新内容如下：</p>
-              <p>1. 移动底部导航栏动态显隐。</p>
-              <p>2. 当日收益计算方式完善。</p>
-              <p>3. 自定义分组交易记录数据问题。</p>
-              <p>4. PC端分组左右滑动问题。</p>
-              <p>5. 恢复自定义分组添加全部分组的基金到此分组。</p>
+              <p>v1.1.1 更新内容如下：</p>
+              <p>1. 全部分组增加关联持仓逻辑（同一只基金，全部分组不设置持仓，1个或多个自定义分组存在持仓，会在全部分组合并计算）。</p>
+              <p>2. 自定义分组设置持仓判断是否从全部分组合并。</p>
+              <p>3. 修复近1周、近1月等在移动端数字适配问题。</p>
               <br/>
-              <p>感谢上月以下用户对本项目赞助支持（排名不分先后）。</p>
-              <p>y*w、s*、*李、l*r、钱程似锦、Y*u、*子、F、陈*n、z*g、小坏、*.、*枫、*z、aqara、Aimer、*L、**赛、**文、*彬</p>
+              <p>注：</p>
+              <p>全部分组与自定义分组各自独立持仓，如果需要在自定义分组设置持仓建议清空在全部分组的持仓，也可以把全部分组的持仓迁移到自定义分组。</p>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>

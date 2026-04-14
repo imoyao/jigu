@@ -1,9 +1,10 @@
 'use client';
 
 import ReactDOM from 'react-dom';
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { throttle } from 'lodash';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   flexRender,
   getCoreRowModel,
@@ -34,8 +35,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { DragIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon } from './Icons';
+import { DragIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon, FolderPlusIcon, LinkIcon } from './Icons';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
+import MoveGroupModal from './MoveGroupModal';
 
 const NON_FROZEN_COLUMN_IDS = [
   'relatedSector',
@@ -80,7 +82,7 @@ const SortableRowContext = createContext({
   listeners: null,
 });
 
-function SortableRow({ row, children, isTableDragging, disabled }) {
+function SortableRow({ row, children, isTableDragging, disabled, enableAnimation = true }) {
   const {
     attributes,
     listeners,
@@ -104,19 +106,30 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
 
   return (
     <SortableRowContext.Provider value={contextValue}>
-      <motion.div
-        ref={setNodeRef}
-        className="table-row-wrapper"
-        layout={isTableDragging ? undefined : "position"}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        style={{ ...style, position: 'relative' }}
-        {...attributes}
-      >
-        {children}
-      </motion.div>
+      {enableAnimation ? (
+        <motion.div
+          ref={setNodeRef}
+          className="table-row-wrapper"
+          layout={isTableDragging ? undefined : "position"}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          style={{ ...style, position: 'relative' }}
+          {...attributes}
+        >
+          {children}
+        </motion.div>
+      ) : (
+        <div
+          ref={setNodeRef}
+          className="table-row-wrapper"
+          style={{ ...style, position: 'relative' }}
+          {...attributes}
+        >
+          {children}
+        </div>
+      )}
     </SortableRowContext.Provider>
   );
 }
@@ -143,9 +156,10 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {Set<string>} [props.favorites] - 自选集合
  * @param {(row: any) => void} [props.onToggleFavorite] - 添加/取消自选
  * @param {(row: any, meta: { hasHolding: boolean }) => void} [props.onHoldingAmountClick] - 点击持仓金额
- * @param {boolean} [props.refreshing] - 是否处于刷新状态（控制删除按钮禁用态）
  * @param {(row: any) => Object} [props.getFundCardProps] - 给定行返回 FundCard 的 props；传入后点击基金名称将用弹框展示卡片详情
  * @param {React.MutableRefObject<(() => void) | null>} [props.closeDialogRef] - 注入关闭弹框的方法，用于确认删除时关闭
+ * @param {React.MutableRefObject<(() => void) | null>} [props.batchSelectionClearRef] - 注入清空批量选中状态的方法，用于父级批量删除二次确认成功后调用
+ * @param {(codes: string[]) => boolean|void} [props.onRemoveFunds] - 批量删除；返回 false 表示已弹出二次确认，勿清空选中
  * @param {boolean} [props.blockDialogClose] - 为 true 时阻止点击遮罩关闭弹框（如删除确认弹框打开时）
  * @param {number} [props.stickyTop] - 表头固定时的 top 偏移（与 MobileFundTable 一致，用于适配导航栏、筛选栏等）
  * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
@@ -155,17 +169,19 @@ export default function PcFundTable({
   data = [],
   onRemoveFund,
   onRemoveFunds,
+  onMoveFunds,
   currentTab,
+  groups = [],
   favorites = new Set(),
   onToggleFavorite,
   onHoldingAmountClick,
   onHoldingProfitClick, // 保留以兼容调用方，表格内已不再使用点击切换
-  refreshing = false,
   sortBy = 'default',
   onReorder,
   onCustomSettingsChange,
   getFundCardProps,
   closeDialogRef,
+  batchSelectionClearRef,
   blockDialogClose = false,
   stickyTop = 0,
   masked = false,
@@ -183,10 +199,14 @@ export default function PcFundTable({
   const [activeId, setActiveId] = useState(null);
   const [cardDialogRow, setCardDialogRow] = useState(null);
   const tableContainerRef = useRef(null);
+  /** 窗口虚拟列表锚点：用于 scrollMargin（.table-scroll-area 仅横向滚动，纵向为整页滚动） */
+  const virtualScrollAnchorRef = useRef(null);
+  const [virtualScrollMargin, setVirtualScrollMargin] = useState(0);
   const portalHeaderRef = useRef(null);
   const [showPortalHeader, setShowPortalHeader] = useState(false);
   const [effectiveStickyTop, setEffectiveStickyTop] = useState(stickyTop);
   const [portalHorizontal, setPortalHorizontal] = useState({ left: 0, right: 0 });
+  const enableRowAnimation = data.length <= 40;
 
   const handleDragStart = (event) => {
     setActiveId(event.active.id);
@@ -216,7 +236,14 @@ export default function PcFundTable({
     () => (Array.isArray(data) ? data.map((d) => d?.code).filter(Boolean) : []),
     [data],
   );
+  /** 全部/自选下「关联汇总持仓」行不参与批量选择 */
+  const batchSelectableCodes = useMemo(
+    () => (Array.isArray(data) ? data.filter((d) => !d?.isHoldingLinked).map((d) => d?.code).filter(Boolean) : []),
+    [data],
+  );
+  const batchSelectableCount = batchSelectableCodes.length;
   const [selectedCodes, setSelectedCodes] = useState(() => new Set());
+  const [moveGroupOpen, setMoveGroupOpen] = useState(false);
 
   useEffect(() => {
     setSelectedCodes(new Set());
@@ -240,24 +267,53 @@ export default function PcFundTable({
     });
   }, [selectableCodes]);
 
+  useEffect(() => {
+    const linkedCodes = new Set(
+      (Array.isArray(data) ? data : [])
+        .filter((d) => d && d.isHoldingLinked && d.code)
+        .map((d) => d.code),
+    );
+    if (!linkedCodes.size) return;
+    setSelectedCodes((prev) => {
+      if (!prev?.size) return prev;
+      let changed = false;
+      const next = new Set(prev);
+      for (const c of linkedCodes) {
+        if (next.delete(c)) changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [data]);
+
+  useEffect(() => {
+    if (!batchSelectionClearRef) return undefined;
+    batchSelectionClearRef.current = () => setSelectedCodes(new Set());
+    return () => {
+      batchSelectionClearRef.current = null;
+    };
+  }, [batchSelectionClearRef]);
+
   const toggleSelected = useCallback((code, checked) => {
     if (!code) return;
+    const row = Array.isArray(data) ? data.find((d) => d?.code === code) : null;
+    if (row?.isHoldingLinked) return;
     setSelectedCodes((prev) => {
       const next = new Set(prev || []);
       if (checked) next.add(code);
       else next.delete(code);
       return next;
     });
-  }, []);
+  }, [data]);
 
   const setAllSelected = useCallback((checked) => {
     setSelectedCodes(() => {
       if (!checked) return new Set();
-      return new Set(selectableCodes);
+      return new Set(batchSelectableCodes);
     });
-  }, [selectableCodes]);
+  }, [batchSelectableCodes]);
 
   const selectedCount = selectedCodes?.size || 0;
+  const selectedCodesList = useMemo(() => Array.from(selectedCodes || []), [selectedCodes]);
 
   const getCustomSettingsWithMigration = () => {
     if (typeof window === 'undefined') return {};
@@ -521,6 +577,11 @@ export default function PcFundTable({
   const [sectorQuoteByLabel, setSectorQuoteByLabel] = useState({});
 
   const sectorAuthSegment = relatedSectorSessionKey || 'anon';
+  const dataCodes = useMemo(
+    () => Array.from(new Set((data || []).map((d) => d?.code).filter(Boolean))),
+    [data],
+  );
+  const dataCodesKey = useMemo(() => dataCodes.join('|'), [dataCodes]);
 
   const fetchRelatedSector = useCallback(
     (code) => fetchRelatedSectors(code, { authSegment: sectorAuthSegment }),
@@ -550,36 +611,42 @@ export default function PcFundTable({
 
   useEffect(() => {
     if (!relatedSectorEnabled) return;
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (dataCodes.length === 0) return;
 
-    const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
-    const missing = codes.filter((code) => !relatedSectorCacheRef.current.has(code));
+    const missing = dataCodes.filter((code) => !relatedSectorCacheRef.current.has(code));
     if (missing.length === 0) return;
 
     let cancelled = false;
     (async () => {
+      const batch = {};
       await runWithConcurrency(missing, 4, async (code) => {
         const value = await fetchRelatedSector(code);
         relatedSectorCacheRef.current.set(code, value);
-        if (cancelled) return;
-        setRelatedSectorByCode((prev) => {
-          if (prev[code] === value) return prev;
-          return { ...prev, [code]: value };
-        });
+        batch[code] = value;
+      });
+      if (cancelled) return;
+      setRelatedSectorByCode((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [code, value] of Object.entries(batch)) {
+          if (next[code] === value) continue;
+          next[code] = value;
+          changed = true;
+        }
+        return changed ? next : prev;
       });
     })();
 
     return () => { cancelled = true; };
-  }, [relatedSectorEnabled, data, sectorAuthSegment, fetchRelatedSector]);
+  }, [relatedSectorEnabled, dataCodesKey, sectorAuthSegment, fetchRelatedSector, dataCodes]);
 
   useEffect(() => {
     if (!relatedSectorEnabled) return;
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (dataCodes.length === 0) return;
 
     const labels = new Set();
-    for (const row of data) {
-      const code = row?.code;
-      const lbl = code && relatedSectorByCode[code];
+    for (const code of dataCodes) {
+      const lbl = relatedSectorByCode?.[code] ?? relatedSectorCacheRef.current.get(code);
       const t = lbl != null ? String(lbl).trim() : '';
       if (t) labels.add(t);
     }
@@ -587,12 +654,18 @@ export default function PcFundTable({
 
     let cancelled = false;
     (async () => {
+      const batch = {};
       await runWithConcurrency([...labels], 4, async (label) => {
         const quote = await fetchRelatedSectorLiveQuote(label);
-        if (cancelled) return;
-        setSectorQuoteByLabel((prev) => {
-          const prevQ = prev[label];
-          if (prevQ === quote) return prev;
+        batch[label] = quote;
+      });
+      if (cancelled) return;
+      setSectorQuoteByLabel((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [label, quote] of Object.entries(batch)) {
+          const prevQ = next[label];
+          if (prevQ === quote) continue;
           if (
             prevQ &&
             quote &&
@@ -600,15 +673,17 @@ export default function PcFundTable({
             prevQ.name === quote.name &&
             prevQ.code === quote.code
           ) {
-            return prev;
+            continue;
           }
-          return { ...prev, [label]: quote };
-        });
+          next[label] = quote;
+          changed = true;
+        }
+        return changed ? next : prev;
       });
     })();
 
     return () => { cancelled = true; };
-  }, [relatedSectorEnabled, data, relatedSectorByCode]);
+  }, [relatedSectorEnabled, dataCodesKey, relatedSectorByCode, dataCodes]);
 
   const withRelatedSectorFund = useCallback(
     (row) => {
@@ -652,20 +727,25 @@ export default function PcFundTable({
 
   useEffect(() => {
     if (!periodReturnsEnabled) return;
-    if (!Array.isArray(data) || data.length === 0) return;
+    if (dataCodes.length === 0) return;
 
-    const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
-    const missing = codes.filter((code) => !periodReturnsCacheRef.current.has(code));
+    const missing = dataCodes.filter((code) => !periodReturnsCacheRef.current.has(code));
     if (missing.length === 0) return;
 
     let cancelled = false;
     (async () => {
+      const batch = {};
       await runWithConcurrency(missing, 4, async (code) => {
         const value = await fetchFundPeriodReturns(code);
         periodReturnsCacheRef.current.set(code, value);
-        if (cancelled) return;
-        setPeriodReturnsByCode((prev) => {
-          const prevVal = prev[code];
+        batch[code] = value;
+      });
+      if (cancelled) return;
+      setPeriodReturnsByCode((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [code, value] of Object.entries(batch)) {
+          const prevVal = next[code];
           if (
             prevVal
             && prevVal.week === value.week
@@ -674,15 +754,17 @@ export default function PcFundTable({
             && prevVal.month6 === value.month6
             && prevVal.year1 === value.year1
           ) {
-            return prev;
+            continue;
           }
-          return { ...prev, [code]: value };
-        });
+          next[code] = value;
+          changed = true;
+        }
+        return changed ? next : prev;
       });
     })();
 
     return () => { cancelled = true; };
-  }, [periodReturnsEnabled, data]);
+  }, [periodReturnsEnabled, dataCodesKey, dataCodes]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -719,12 +801,16 @@ export default function PcFundTable({
     const hasDca = original.hasDca;
     const isFavorites = favorites?.has?.(code);
     const rowContext = useContext(SortableRowContext);
+    const showFavoriteButton = !isGroupTab && (currentTab === 'all' || currentTab === 'fav' || !currentTab);
+    const holdingLocked =
+      (currentTab === 'all' || currentTab === 'fav') &&
+      !!original.isHoldingLinked;
 
     return (
       <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 8 }}>
                 {batchRemoveEnabled && (
           <label
-            title="选择用于批量删除"
+            title={holdingLocked ? '关联持仓不可批量选择' : '选择用于批量删除'}
             onClick={(e) => e.stopPropagation?.()}
             style={{
               display: 'inline-flex',
@@ -733,19 +819,21 @@ export default function PcFundTable({
               width: 18,
               height: 18,
               flexShrink: 0,
-              cursor: 'pointer',
+              cursor: holdingLocked ? 'not-allowed' : 'pointer',
+              opacity: holdingLocked ? 0.45 : 1,
             }}
           >
             <input
               type="checkbox"
-              checked={selectedCodes?.has?.(code) || false}
+              disabled={holdingLocked}
+              checked={!holdingLocked && (selectedCodes?.has?.(code) || false)}
               onChange={(e) => toggleSelected(code, e.target.checked)}
               onClick={(e) => e.stopPropagation?.()}
               style={{
                 width: 14,
                 height: 14,
                 accentColor: 'var(--primary)',
-                cursor: 'pointer',
+                cursor: holdingLocked ? 'not-allowed' : 'pointer',
               }}
               aria-label="选择基金"
             />
@@ -763,7 +851,7 @@ export default function PcFundTable({
             <DragIcon width="16" height="16" />
           </button>
         )}
-        {!isGroupTab && !batchRemoveEnabled ? (
+        {showFavoriteButton ? (
           <button
             className={`icon-button fav-button ${isFavorites ? 'active' : ''}`}
             onClick={(e) => {
@@ -788,6 +876,23 @@ export default function PcFundTable({
             className={`name-text ${showFullFundName ? 'show-full' : ''}`}
             title={isUpdated ? '今日净值已更新' : ''}
           >
+            {holdingLocked ? (
+              <span
+                title="持仓来自自定义分组汇总"
+                aria-label="已关联持仓"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  marginRight: 6,
+                  color: 'var(--primary)',
+                  verticalAlign: 'middle',
+                  position: 'relative',
+                  bottom: 2,
+                }}
+              >
+                <LinkIcon width="14" height="14" />
+              </span>
+            ) : null}
             {info.getValue() ?? '—'}
           </span>
           {code ? <span className="muted code-text">
@@ -806,7 +911,7 @@ export default function PcFundTable({
         accessorKey: 'fundName',
         header: () => {
           if (!batchRemoveEnabled) return '基金名称';
-          const allCount = selectableCodes.length;
+          const allCount = batchSelectableCount;
           const checked = allCount > 0 && selectedCount === allCount;
           const indeterminate = selectedCount > 0 && selectedCount < allCount;
           return (
@@ -820,10 +925,14 @@ export default function PcFundTable({
               onRemove={() => {
                 if (!onRemoveFunds || selectedCount === 0) return;
                 const codes = Array.from(selectedCodes);
-                onRemoveFunds(codes);
-                setSelectedCodes(new Set());
+                const shouldClear = onRemoveFunds(codes);
+                if (shouldClear !== false) setSelectedCodes(new Set());
               }}
-              disabled={refreshing || selectedCount === 0}
+              onMove={() => {
+                if (!onMoveFunds || selectedCount === 0) return;
+                setMoveGroupOpen(true);
+              }}
+              disabled={selectedCount === 0}
             />
           );
         },
@@ -1169,21 +1278,33 @@ export default function PcFundTable({
         minSize: 100,
         cell: (info) => {
           const original = info.row.original || {};
+          const holdingLocked =
+            (currentTab === 'all' || currentTab === 'fav') &&
+            !!original.isHoldingLinked;
+          const holdingLockedTitle = '持仓来自自定义分组汇总，无法在「全部/自选」设置持仓金额';
           if (original.holdingAmountValue == null) {
             return (
               <div
-                role="button"
-                tabIndex={0}
+                role={holdingLocked ? undefined : 'button'}
+                tabIndex={holdingLocked ? -1 : 0}
                 className="muted"
-                title="设置持仓"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '12px', cursor: 'pointer' }}
+                title={holdingLocked ? holdingLockedTitle : '设置持仓'}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: '12px',
+                  cursor: holdingLocked ? 'not-allowed' : 'pointer',
+                }}
                 onClick={(e) => {
                   e.stopPropagation?.();
+                  if (holdingLocked) return;
                   onHoldingAmountClickRef.current?.(original, { hasHolding: false });
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
+                    if (holdingLocked) return;
                     onHoldingAmountClickRef.current?.(original, { hasHolding: false });
                   }
                 }}
@@ -1194,10 +1315,17 @@ export default function PcFundTable({
           }
           return (
             <div
-              title="点击设置持仓"
-              style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', width: '100%', minWidth: 0 }}
+              title={holdingLocked ? holdingLockedTitle : '点击设置持仓'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                cursor: holdingLocked ? 'not-allowed' : 'pointer',
+                width: '100%',
+                minWidth: 0,
+              }}
               onClick={(e) => {
                 e.stopPropagation?.();
+                if (holdingLocked) return;
                 onHoldingAmountClickRef.current?.(original, { hasHolding: true });
               }}
             >
@@ -1210,10 +1338,21 @@ export default function PcFundTable({
                 className="icon-button no-hover"
                 onClick={(e) => {
                   e.stopPropagation?.();
+                  if (holdingLocked) return;
                   onHoldingAmountClickRef.current?.(original, { hasHolding: true });
                 }}
-                title="编辑持仓"
-                style={{ border: 'none', width: '28px', height: '28px', marginLeft: 4, flexShrink: 0, backgroundColor: 'transparent' }}
+                title={holdingLocked ? holdingLockedTitle : '编辑持仓'}
+                disabled={holdingLocked}
+                style={{
+                  border: 'none',
+                  width: '28px',
+                  height: '28px',
+                  marginLeft: 4,
+                  flexShrink: 0,
+                  backgroundColor: 'transparent',
+                  color: holdingLocked ? 'var(--muted)' : undefined,
+                  cursor: holdingLocked ? 'not-allowed' : 'pointer',
+                }}
               >
                 <SettingsIcon width="14" height="14" />
               </button>
@@ -1381,7 +1520,6 @@ export default function PcFundTable({
 
           const handleClick = (e) => {
             e.stopPropagation?.();
-            if (refreshing) return;
             onRemoveFundRef.current?.(original);
           };
 
@@ -1391,12 +1529,11 @@ export default function PcFundTable({
                 className="icon-button danger"
                 onClick={handleClick}
                 title="删除"
-                disabled={refreshing}
                 style={{
                   width: '28px',
                   height: '28px',
-                  opacity: refreshing ? 0.6 : 1,
-                  cursor: refreshing ? 'not-allowed' : 'pointer',
+                  opacity: 1,
+                  cursor: 'pointer',
                 }}
               >
                 <TrashIcon width="14" height="14" />
@@ -1409,7 +1546,6 @@ export default function PcFundTable({
     [
       currentTab,
       favorites,
-      refreshing,
       sortBy,
       showFullFundName,
       getFundCardProps,
@@ -1418,10 +1554,11 @@ export default function PcFundTable({
       sectorQuoteByLabel,
       periodReturnsByCode,
       batchRemoveEnabled,
-      selectableCodes.length,
+      batchSelectableCount,
       selectedCount,
       selectedCodes,
       onRemoveFunds,
+      onMoveFunds,
       setAllSelected,
       toggleSelected,
     ],
@@ -1464,6 +1601,40 @@ export default function PcFundTable({
   });
 
   const headerGroup = table.getHeaderGroups()[0];
+  const tableRows = table.getRowModel().rows;
+  const enableVirtualization = data.length > 40;
+  const rowVirtualizer = useWindowVirtualizer({
+    count: tableRows.length,
+    estimateSize: () => 72,
+    measureElement: (el) => el.getBoundingClientRect().height,
+    overscan: 8,
+    scrollMargin: virtualScrollMargin,
+    enabled: enableVirtualization,
+  });
+
+  useLayoutEffect(() => {
+    if (!enableVirtualization) return;
+    const el = virtualScrollAnchorRef.current;
+    if (!el) return;
+    const update = () => {
+      setVirtualScrollMargin(el.getBoundingClientRect().top + window.scrollY);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    const scrollArea = el.closest?.('.table-scroll-area');
+    if (scrollArea) ro.observe(scrollArea);
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+    };
+  }, [enableVirtualization, tableRows.length, stickyTop]);
+
+  useEffect(() => {
+    if (!enableVirtualization) return;
+    rowVirtualizer.measure();
+  }, [enableVirtualization, tableRows.length, rowVirtualizer]);
 
   const getCommonPinningStyles = (column, isHeader) => {
     const isPinned = column.getIsPinned();
@@ -1631,28 +1802,49 @@ export default function PcFundTable({
         .resizer.disabled::after {
           opacity: 0;
         }
+
+        /* 窗口级纵向虚拟滚动：表体自身不出现纵向滚动条，仅随页面滚动 */
+        .pc-fund-table-body-virtual {
+          overflow-x: visible;
+          overflow-y: visible;
+          width: 100%;
+        }
       `}</style>
         {/* 表头 */}
         {renderTableHeader(false)}
 
         {/* 表体 */}
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onDragCancel={handleDragCancel}
-          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-        >
-          <SortableContext
-            items={data.map((item) => item.code)}
-            strategy={verticalListSortingStrategy}
+        {enableVirtualization ? (
+          <div
+            ref={virtualScrollAnchorRef}
+            className="pc-fund-table-body-virtual"
+            style={{ position: 'relative', width: '100%' }}
           >
-            <AnimatePresence mode="popLayout">
-              {table.getRowModel().rows.map((row, index) => (
-                <SortableRow key={row.original.code || row.id} row={row} isTableDragging={!!activeId} disabled={sortBy !== 'default'}>
+            <div
+              style={{
+                height: rowVirtualizer.getTotalSize(),
+                position: 'relative',
+                width: '100%',
+              }}
+            >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const row = tableRows[virtualRow.index];
+              if (!row) return null;
+              return (
+                <div
+                  key={row.original.code || row.id}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
+                  }}
+                >
                   <div
-                    className={`table-row table-row-scroll ${index % 2 === 1 ? 'row-even' : ''}`}
+                    className={`table-row table-row-scroll ${virtualRow.index % 2 === 1 ? 'row-even' : ''}`}
                   >
                     {row.getVisibleCells().map((cell) => {
                       const columnId = cell.column.id || cell.column.columnDef?.accessorKey;
@@ -1680,11 +1872,112 @@ export default function PcFundTable({
                       );
                     })}
                   </div>
-                </SortableRow>
-              ))}
-            </AnimatePresence>
-          </SortableContext>
-        </DndContext>
+                </div>
+              );
+            })}
+            </div>
+          </div>
+        ) : (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+          >
+            <SortableContext
+              items={data.map((item) => item.code)}
+              strategy={verticalListSortingStrategy}
+            >
+              {enableRowAnimation ? (
+                <AnimatePresence mode="popLayout">
+                  {tableRows.map((row, index) => (
+                    <SortableRow
+                      key={row.original.code || row.id}
+                      row={row}
+                      isTableDragging={!!activeId}
+                      disabled={sortBy !== 'default'}
+                      enableAnimation={!activeId}
+                    >
+                      <div
+                        className={`table-row table-row-scroll ${index % 2 === 1 ? 'row-even' : ''}`}
+                      >
+                        {row.getVisibleCells().map((cell) => {
+                          const columnId = cell.column.id || cell.column.columnDef?.accessorKey;
+                          const isNameColumn = columnId === 'fundName';
+                          const align = isNameColumn
+                            ? ''
+                            : NON_FROZEN_COLUMN_IDS.includes(columnId)
+                              ? 'text-right'
+                              : 'text-center';
+                          const cellClassName =
+                            (cell.column.columnDef.meta && cell.column.columnDef.meta.cellClassName) || '';
+                          const style = getCommonPinningStyles(cell.column, false);
+                          const isPinned = cell.column.getIsPinned();
+                          return (
+                            <div
+                              key={cell.id}
+                              className={`table-cell ${align} ${cellClassName} ${isPinned ? 'pinned-cell' : ''}`}
+                              style={style}
+                            >
+                              {flexRender(
+                                cell.column.columnDef.cell,
+                                cell.getContext(),
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </SortableRow>
+                  ))}
+                </AnimatePresence>
+              ) : (
+                <>
+                  {tableRows.map((row, index) => (
+                    <SortableRow
+                      key={row.original.code || row.id}
+                      row={row}
+                      isTableDragging={!!activeId}
+                      disabled={sortBy !== 'default'}
+                      enableAnimation={false}
+                    >
+                      <div
+                        className={`table-row table-row-scroll ${index % 2 === 1 ? 'row-even' : ''}`}
+                      >
+                        {row.getVisibleCells().map((cell) => {
+                          const columnId = cell.column.id || cell.column.columnDef?.accessorKey;
+                          const isNameColumn = columnId === 'fundName';
+                          const align = isNameColumn
+                            ? ''
+                            : NON_FROZEN_COLUMN_IDS.includes(columnId)
+                              ? 'text-right'
+                              : 'text-center';
+                          const cellClassName =
+                            (cell.column.columnDef.meta && cell.column.columnDef.meta.cellClassName) || '';
+                          const style = getCommonPinningStyles(cell.column, false);
+                          const isPinned = cell.column.getIsPinned();
+                          return (
+                            <div
+                              key={cell.id}
+                              className={`table-cell ${align} ${cellClassName} ${isPinned ? 'pinned-cell' : ''}`}
+                              style={style}
+                            >
+                              {flexRender(
+                                cell.column.columnDef.cell,
+                                cell.getContext(),
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </SortableRow>
+                  ))}
+                </>
+              )}
+            </SortableContext>
+          </DndContext>
+        )}
 
         {table.getRowModel().rows.length === 0 && (
           <div className="table-row empty-row">
@@ -1774,6 +2067,23 @@ export default function PcFundTable({
         showFullFundName={showFullFundName}
         onToggleShowFullFundName={handleToggleShowFullFundName}
       />
+      {moveGroupOpen && (
+        <MoveGroupModal
+          open={moveGroupOpen}
+          onClose={() => setMoveGroupOpen(false)}
+          fromTab={currentTab}
+          groups={groups}
+          selectedCodes={selectedCodesList}
+          disabled={selectedCount === 0}
+          onMoveFunds={async (payload) => {
+            const res = await onMoveFunds?.(payload);
+            if (payload?.dryRun) return res;
+            // 迁移成功后清空批量选中
+            setSelectedCodes(new Set());
+            return res;
+          }}
+        />
+      )}
     </>
 
   );
@@ -1814,6 +2124,7 @@ function BatchRemoveHeader({
   selectedCount,
   totalCount,
   onToggleAll,
+  onMove,
   onRemove,
   onClear,
   disabled,
@@ -1856,29 +2167,54 @@ function BatchRemoveHeader({
         )}
       </div>
 
-      <button
-        className="icon-button"
-        onClick={(e) => { e.stopPropagation?.(); onRemove?.(); }}
-        title="批量删除"
-        disabled={!!disabled}
-        type="button"
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '0 10px',
-          height: 28,
-          width: 'auto',
-          opacity: disabled ? 0.6 : 1,
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          backgroundColor: 'transparent',
-          border: 'none',
-          color: 'var(--danger)'
-        }}
-      >
-        <TrashIcon width="14" height="14" />
-        <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>批量删除</span>
-      </button>
+      <div style={{ display: 'inline-flex', alignItems: 'center' }}>
+        <button
+          className="icon-button"
+          onClick={(e) => { e.stopPropagation?.(); onMove?.(); }}
+          title="移动分组"
+          disabled={!!disabled}
+          type="button"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '0 6px',
+            height: 28,
+            width: 'auto',
+            opacity: disabled ? 0.6 : 1,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            backgroundColor: 'transparent',
+            border: 'none',
+            color: 'var(--primary)'
+          }}
+        >
+          <FolderPlusIcon width="14" height="14" />
+          <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>移动分组</span>
+        </button>
+        <button
+          className="icon-button"
+          onClick={(e) => { e.stopPropagation?.(); onRemove?.(); }}
+          title="批量删除"
+          disabled={!!disabled}
+          type="button"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '0 6px',
+            height: 28,
+            width: 'auto',
+            opacity: disabled ? 0.6 : 1,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            backgroundColor: 'transparent',
+            border: 'none',
+            color: 'var(--danger)'
+          }}
+        >
+          <TrashIcon width="14" height="14" />
+          <span style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>批量删除</span>
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,12 +1,15 @@
 'use client';
 
+const SUMMARY_TAB_ID = '__portfolio_groups_summary__';
+
 export default function EmptyStateCard({
   fundsLength = 0,
   currentTab = 'all',
   onAddToGroup,
 }) {
   const isEmpty = fundsLength === 0;
-  const isGroupTab = currentTab !== 'all' && currentTab !== 'fav';
+  const isGroupTab =
+    currentTab !== 'all' && currentTab !== 'fav' && currentTab !== SUMMARY_TAB_ID;
 
   return (
     <div
