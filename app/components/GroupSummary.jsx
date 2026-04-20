@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState, useMemo, useLayoutEffect } from 'react';
 import { PinIcon, PinOffIcon, EyeIcon, EyeOffIcon, SwitchIcon } from './Icons';
 
+/** 与 app/page.jsx、EmptyStateCard 中虚拟「汇总」Tab id 保持一致 */
+const SUMMARY_TAB_ID = '__portfolio_groups_summary__';
+
 // 数字滚动组件（初始化时无动画，后续变更再动画）
 function CountUp({ value, prefix = '', suffix = '', decimals = 2, className = '', style = {} }) {
   const [displayValue, setDisplayValue] = useState(value);
@@ -56,7 +59,7 @@ function CountUp({ value, prefix = '', suffix = '', decimals = 2, className = ''
   return (
     <span className={className} style={style}>
       {prefix}
-      {Math.abs(displayValue).toFixed(decimals)}
+      {Math.abs(displayValue).toLocaleString('zh-CN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}
       {suffix}
     </span>
   );
@@ -65,7 +68,9 @@ function CountUp({ value, prefix = '', suffix = '', decimals = 2, className = ''
 export default function GroupSummary({
   funds,
   holdings,
-  groupName,
+  /** 当前首页分组 Tab：用于标题文案，避免仅依赖父级传入的 groupName 时偶发不同步 */
+  portfolioTabId,
+  groups = [],
   getProfit,
   /** 与内部 summary 同结构；传入时顶部汇总数字以此为准（如汇总 Tab 下全局+分组双账本合计） */
   summaryTotalsOverride = null,
@@ -118,6 +123,15 @@ export default function GroupSummary({
       setIsMasked(masked);
     }
   }, [masked]);
+
+  const portfolioScopeLabel = useMemo(() => {
+    const tab = portfolioTabId;
+    if (tab === 'all') return '全部资产';
+    if (tab === 'fav') return '自选资产';
+    if (tab === SUMMARY_TAB_ID) return '汇总资产';
+    const group = (groups || []).find((g) => g.id === tab);
+    return group ? `${group.name}资产` : '分组资产';
+  }, [portfolioTabId, groups]);
 
   const derivedSummary = useMemo(() => {
     let totalAsset = 0;
@@ -256,8 +270,8 @@ export default function GroupSummary({
             <div
               style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}
             >
-              <div className="muted" style={{ fontSize: '12px' }}>
-                {groupName}
+              <div className="muted" style={{ fontSize: '12px' }} key={portfolioTabId}>
+                {portfolioScopeLabel}
               </div>
               <button
                 className="fav-button"

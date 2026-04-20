@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from 'react';
 import Image from 'next/image';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
+import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import zhifubaoImg from "../assets/zhifubao.jpg";
 import weixinImg from "../assets/weixin.jpg";
 import { CalendarIcon, MinusIcon, PlusIcon } from './Icons';
@@ -27,116 +29,59 @@ const nowInTz = () => dayjs().tz(TZ);
 const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
 const formatDate = (input) => toTz(input).format('YYYY-MM-DD');
 
-export function DatePicker({ value, onChange, position = 'bottom' }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [currentMonth, setCurrentMonth] = useState(() => value ? toTz(value) : nowInTz());
+export function DatePicker({ value, onChange, position = 'bottom', minDate }) {
+  const [open, setOpen] = useState(false);
+  const today = nowInTz().startOf('day');
+  const selected = value ? toTz(value).toDate() : undefined;
+  const weekdayLabels = ['日', '一', '二', '三', '四', '五', '六'];
 
-  useEffect(() => {
-    const close = () => setIsOpen(false);
-    if (isOpen) window.addEventListener('click', close);
-    return () => window.removeEventListener('click', close);
-  }, [isOpen]);
-
-  const year = currentMonth.year();
-  const month = currentMonth.month();
-
-  const handlePrevMonth = (e) => {
-    e.stopPropagation();
-    setCurrentMonth(currentMonth.subtract(1, 'month').startOf('month'));
-  };
-
-  const handleNextMonth = (e) => {
-    e.stopPropagation();
-    setCurrentMonth(currentMonth.add(1, 'month').startOf('month'));
-  };
-
-  const handleSelect = (e, day) => {
-    e.stopPropagation();
-    const dateStr = formatDate(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
-
-    const today = nowInTz().startOf('day');
-    const selectedDate = toTz(dateStr).startOf('day');
-
-    if (selectedDate.isAfter(today)) return;
-
-    onChange(dateStr);
-    setIsOpen(false);
-  };
-
-  const daysInMonth = currentMonth.daysInMonth();
-  const firstDayOfWeek = currentMonth.startOf('month').day();
-
-  const days = [];
-  for (let i = 0; i < firstDayOfWeek; i++) days.push(null);
-  for (let i = 1; i <= daysInMonth; i++) days.push(i);
+  const disabled = minDate
+    ? { before: toTz(minDate).startOf('day').toDate() }
+    : { after: today.toDate() };
 
   return (
-    <div className="date-picker" style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-      <div
-        className="date-picker-trigger"
-        onClick={() => setIsOpen(!isOpen)}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          className="input date-picker-trigger w-full justify-between font-normal"
+        >
+          <span>{value || '选择日期'}</span>
+          <CalendarIcon width="16" height="16" className="muted" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="date-picker-dropdown glass card w-auto overflow-hidden p-0 !z-[13000]"
+        align="start"
+        side={position === 'top' ? 'top' : 'bottom'}
       >
-        <span>{value || '选择日期'}</span>
-        <CalendarIcon width="16" height="16" className="muted" />
-      </div>
-
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: position === 'top' ? -10 : 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: position === 'top' ? -10 : 10, scale: 0.95 }}
-            className="date-picker-dropdown glass card"
-            style={{
-              position: 'absolute',
-              ...(position === 'top' ? { bottom: '100%', marginBottom: 8 } : { top: '100%', marginTop: 8 }),
-              left: 0,
-              width: '100%',
-              padding: 12,
-              zIndex: 10
-            }}
-          >
-            <div className="calendar-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <button type="button" onClick={handlePrevMonth} className="icon-button" style={{ width: 24, height: 24 }}>&lt;</button>
-              <span style={{ fontWeight: 600 }}>{year}年 {month + 1}月</span>
-              <button
-                type="button"
-                onClick={handleNextMonth}
-                className="icon-button"
-                style={{ width: 24, height: 24 }}
-              >
-                &gt;
-              </button>
-            </div>
-
-            <div className="calendar-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4, textAlign: 'center' }}>
-              {['日', '一', '二', '三', '四', '五', '六'].map(d => (
-                <div key={d} className="muted" style={{ fontSize: '12px', marginBottom: 4 }}>{d}</div>
-              ))}
-              {days.map((d, i) => {
-                if (!d) return <div key={i} />;
-                const dateStr = formatDate(`${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
-                const isSelected = value === dateStr;
-                const today = nowInTz().startOf('day');
-                const current = toTz(dateStr).startOf('day');
-                const isToday = current.isSame(today);
-                const isFuture = current.isAfter(today);
-
-                return (
-                  <div
-                    key={i}
-                    className={`date-picker-cell ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''} ${isFuture ? 'future' : ''}`}
-                    onClick={(e) => !isFuture && handleSelect(e, d)}
-                  >
-                    {d}
-                  </div>
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        <Calendar
+          mode="single"
+          selected={selected}
+          defaultMonth={selected}
+          captionLayout="dropdown"
+          formatters={{
+            formatWeekdayName: (date) => weekdayLabels[date.getDay()],
+          }}
+          classNames={{
+            dropdown_root:
+              "relative rounded-md border-0 shadow-none has-focus:border-0 has-focus:ring-0",
+            today:
+              "rounded-md bg-primary/15 text-primary data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground",
+          }}
+          disabled={disabled}
+          onSelect={(d) => {
+            if (!d) return;
+            const next = toTz(d).startOf('day');
+            if (minDate && next.isBefore(toTz(minDate).startOf('day'))) return;
+            if (!minDate && next.isAfter(today)) return;
+            onChange(formatDate(next));
+            setOpen(false);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 

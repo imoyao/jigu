@@ -1,6 +1,6 @@
 'use client';
 
-import { useLayoutEffect, useRef } from 'react';
+import { useCallback, useLayoutEffect, useRef } from 'react';
 
 /**
  * 根据容器宽度动态缩小字体，使内容不溢出。
@@ -25,13 +25,15 @@ export default function FitText({
   const containerRef = useRef(null);
   const contentRef = useRef(null);
 
-  const adjust = () => {
+  const adjust = useCallback(() => {
     const container = containerRef.current;
     const content = contentRef.current;
     if (!container || !content) return;
 
-    const containerWidth = container.clientWidth;
-    if (containerWidth <= 0) return;
+    const containerRect = container.getBoundingClientRect();
+    const containerWidth =
+      container.clientWidth > 0 ? container.clientWidth : containerRect.width;
+    if (!Number.isFinite(containerWidth) || containerWidth <= 0) return;
 
     // 先恢复到最大字号再测量，确保在「未缩放」状态下取到真实内容宽度
     content.style.fontSize = `${maxFontSize}px`;
@@ -48,7 +50,7 @@ export default function FitText({
     };
 
     requestAnimationFrame(run);
-  };
+  }, [maxFontSize, minFontSize]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -58,7 +60,7 @@ export default function FitText({
     const ro = new ResizeObserver(adjust);
     ro.observe(container);
     return () => ro.disconnect();
-  }, [children, maxFontSize, minFontSize]);
+  }, [adjust, children]);
 
   return (
     <Tag
@@ -67,6 +69,10 @@ export default function FitText({
       style={{
         display: 'block',
         width: '100%',
+        alignSelf: 'stretch',
+        boxSizing: 'border-box',
+        minWidth: 0,
+        maxWidth: '100%',
         overflow: 'hidden',
         ...style,
       }}

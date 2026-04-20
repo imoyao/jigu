@@ -2,7 +2,8 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/* 项目主题切换使用 data-theme="dark"，同时兼容 .dark（shadcn 默认） */
+@custom-variant dark (&:is(.dark *, [data-theme="dark"] *));
 
 :root {
   /* 深色主题：红色系主调（低饱和深红+高饱和红渐变） */
@@ -3182,13 +3183,9 @@ input[type="number"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
-  height: 40px;
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 8px;
   cursor: pointer;
-  border: 1px solid transparent;
-  transition: all 0.2s;
+  height: auto;
+  padding: 0 8px;
 }
 
 .date-picker-dropdown {
@@ -3236,11 +3233,6 @@ input[type="number"] {
 }
 
 /* 亮色主题：DatePicker */
-[data-theme="light"] .date-picker-trigger {
-  background: rgba(0, 0, 0, 0.06);
-  border-color: var(--border);
-}
-
 [data-theme="light"] .date-picker-dropdown {
   background: rgba(255, 255, 255, 0.98);
   border-color: var(--border);

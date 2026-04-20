@@ -380,7 +380,7 @@ export default function MarketIndexAccordion({
       >
         <AccordionItem value="indices" className="border-b-0">
           <AccordionTrigger
-            className="py-3 px-4 hover:no-underline hover:bg-[var(--card)] [&[data-state=open]>svg]:rotate-90"
+            className="py-2 px-4 hover:no-underline hover:bg-[var(--card)] [&[data-state=open]>svg]:rotate-90"
             style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
           >
             <div className="flex flex-1 items-center gap-3 min-w-0">

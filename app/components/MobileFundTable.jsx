@@ -30,11 +30,17 @@ import MobileSettingModal from './MobileSettingModal';
 import MoveGroupModal from './MoveGroupModal';
 import { ArrowUpToLineIcon, CloseIcon, DragIcon, FolderPlusIcon, LinkIcon, PencilIcon, SettingsIcon, StarIcon, TrashIcon } from './Icons';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
+import { Badge } from '@/components/ui/badge';
+import { getTagThemeBadgeProps } from '@/app/components/AddTagDialog';
+import { cn } from '@/lib/utils';
 
 const EDIT_MOVE_TO_FRONT_COL = 'editMoveToFront';
 const EDIT_DRAG_COL = 'editDrag';
 
+const MOBILE_TAGS_COLUMN_ID = 'tags';
+
 const MOBILE_NON_FROZEN_COLUMN_IDS = [
+  'tags',
   'relatedSector',
   'yesterdayChangePercent',
   'estimateChangePercent',
@@ -49,8 +55,13 @@ const MOBILE_NON_FROZEN_COLUMN_IDS = [
   'period3m',
   'period6m',
   'period1y',
+  'holdingCost',
+  'costNav',
   'estimateNav',
 ];
+
+const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set(['tags', 'holdingCost', 'costNav']);
+
 const MOBILE_COLUMN_HEADERS = {
   relatedSector: '关联板块',
   period1w: '近1周',
@@ -63,10 +74,13 @@ const MOBILE_COLUMN_HEADERS = {
   yesterdayChangePercent: '最新涨幅',
   estimateChangePercent: '估算涨幅',
   totalChangePercent: '估算收益',
+  holdingCost: '持仓成本',
+  costNav: '成本净值',
   holdingDays: '持有天数',
   todayProfit: '当日收益',
   yesterdayProfit: '昨日收益',
   holdingProfit: '持有收益',
+  tags: '基金标签',
 };
 
 const RowSortableContext = createContext(null);
@@ -305,6 +319,7 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
  * @param {(payload: { codes: string[]; fromTab: string; targetId: string; dryRun?: boolean; overwrite?: boolean }) => Promise<{ conflicts?: string[] }|void>} [props.onMoveFunds] - 批量迁移分组（与 PC 一致）
  * @param {(open: boolean) => void} [props.onFundCardDrawerOpenChange] - 基金详情底部 Drawer 打开/关闭时通知父级（用于隐藏底栏等）
  * @param {(open: boolean) => void} [props.onMobileSettingModalOpenChange] - 移动端表格「个性化设置」弹框打开/关闭时通知父级（用于隐藏底栏等）
+ * @param {(row: any) => void} [props.onFundTagsClick] - 点击标签列时打开编辑标签
  */
 export default function MobileFundTable({
   data = [],
@@ -329,6 +344,7 @@ export default function MobileFundTable({
   batchSelectionClearRef,
   onFundCardDrawerOpenChange,
   onMobileSettingModalOpenChange,
+  onFundTagsClick,
 }) {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editSelectedCodes, setEditSelectedCodes] = useState(() => new Set());
@@ -431,6 +447,7 @@ export default function MobileFundTable({
   const onToggleFavoriteRef = useRef(onToggleFavorite);
   const onRemoveFundRef = useRef(onRemoveFund);
   const onHoldingAmountClickRef = useRef(onHoldingAmountClick);
+  const onFundTagsClickRef = useRef(onFundTagsClick);
 
   useEffect(() => {
     if (closeDrawerRef) {
@@ -443,10 +460,12 @@ export default function MobileFundTable({
     onToggleFavoriteRef.current = onToggleFavorite;
     onRemoveFundRef.current = onRemoveFund;
     onHoldingAmountClickRef.current = onHoldingAmountClick;
+    onFundTagsClickRef.current = onFundTagsClick;
   }, [
     onToggleFavorite,
     onRemoveFund,
     onHoldingAmountClick,
+    onFundTagsClick,
   ]);
 
   const handleDragStart = (e) => setActiveId(e.active.id);
@@ -541,7 +560,9 @@ export default function MobileFundTable({
     if (vis && typeof vis === 'object' && Object.keys(vis).length > 0) {
       const next = { ...vis };
       MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
-        if (next[id] === undefined) next[id] = true;
+        if (next[id] === undefined) {
+          next[id] = MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
+        }
       });
       return next;
     }
@@ -748,6 +769,7 @@ export default function MobileFundTable({
     fundName: 140,
     [EDIT_MOVE_TO_FRONT_COL]: 72,
     [EDIT_DRAG_COL]: 72,
+    tags: 120,
     relatedSector: 120,
     period1w: 72,
     period1m: 72,
@@ -763,6 +785,8 @@ export default function MobileFundTable({
     todayProfit: 80,
     yesterdayProfit: 80,
     holdingProfit: 80,
+    holdingCost: 80,
+    costNav: 64,
   };
 
   const relatedSectorEnabled = mobileColumnVisibility?.relatedSector !== false;
@@ -1370,6 +1394,70 @@ export default function MobileFundTable({
         meta: { align: 'center', cellClassName: 'mobile-edit-action-cell', width: columnWidthMap[EDIT_DRAG_COL] },
       },
       {
+        id: 'tags',
+        header: '基金标签',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const list = Array.isArray(original.fundTags) ? original.fundTags : [];
+          const hasTags = list.length > 0;
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation?.();
+                onFundTagsClickRef.current?.(original);
+              }}
+              style={{
+                width: '100%',
+                minWidth: 0,
+                border: 'none',
+                background: 'transparent',
+                padding: '2px 0',
+                cursor: onFundTagsClick ? 'pointer' : 'default',
+                textAlign: 'left',
+              }}
+              disabled={!onFundTagsClick}
+              title={onFundTagsClick ? '编辑标签' : undefined}
+            >
+              {hasTags ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 4,
+                    justifyContent: 'flex-end',
+                  }}
+                >
+                  {list.map((raw, idx) => {
+                    const item =
+                      raw && typeof raw === 'object' && raw.name != null
+                        ? {
+                            name: String(raw.name).trim(),
+                            theme: String(raw.theme ?? 'default').trim() || 'default',
+                          }
+                        : { name: String(raw).trim(), theme: 'default' };
+                    if (!item.name) return null;
+                    const { variant, className: themeCls } = getTagThemeBadgeProps(item.theme);
+                    return (
+                      <Badge
+                        key={`${item.name}-${idx}`}
+                        variant={variant}
+                        className={cn('text-[11px] font-normal', themeCls)}
+                      >
+                        {item.name}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              ) : (
+                 <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>
+        )}
+            </button>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'tags-cell', width: columnWidthMap.tags ?? 120 },
+      },
+      {
         id: 'relatedSector',
         header: '关联板块',
         cell: (info) => {
@@ -1435,11 +1523,9 @@ export default function MobileFundTable({
             ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
             : '—';
           return (
-            <div style={{ textAlign: 'right' }}>
-              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+              <FitText className={cls} style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10} as="div">
                 {text}
               </FitText>
-            </div>
           );
         },
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1w ?? 72 },
@@ -1456,11 +1542,9 @@ export default function MobileFundTable({
             ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
             : '—';
           return (
-            <div style={{ textAlign: 'right' }}>
-              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+              <FitText className={cls} style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10} as="div">
                 {text}
               </FitText>
-            </div>
           );
         },
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1m ?? 72 },
@@ -1477,11 +1561,9 @@ export default function MobileFundTable({
             ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
             : '—';
           return (
-            <div style={{ textAlign: 'right' }}>
-              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+              <FitText className={cls} style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10} as="div">
                 {text}
               </FitText>
-            </div>
           );
         },
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period3m ?? 72 },
@@ -1498,11 +1580,9 @@ export default function MobileFundTable({
             ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
             : '—';
           return (
-            <div style={{ textAlign: 'right' }}>
-              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+              <FitText className={cls} style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10} as="div">
                 {text}
               </FitText>
-            </div>
           );
         },
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period6m ?? 72 },
@@ -1519,14 +1599,44 @@ export default function MobileFundTable({
             ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
             : '—';
           return (
-            <div style={{ textAlign: 'right' }}>
-              <FitText className={cls} style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10} as="div">
+              <FitText className={cls} style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10} as="div">
                 {text}
               </FitText>
-            </div>
           );
         },
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1y ?? 72 },
+      },
+      {
+        accessorKey: 'holdingCost',
+        header: '持仓成本',
+        cell: (info) => {
+          const original = info.row.original || {};
+          if (original.holdingCostValue == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+              <FitText style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10}>
+                {masked ? <span className="mask-text">******</span> : (info.getValue() ?? '—')}
+              </FitText>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'holding-cost-cell', width: columnWidthMap.holdingCost ?? 80 },
+      },
+      {
+        accessorKey: 'costNav',
+        header: '成本净值',
+        cell: (info) => {
+          const original = info.row.original || {};
+          if (original.costNavValue == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+              <FitText style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10}>
+                {masked ? <span className="mask-text">******</span> : (info.getValue() ?? '—')}
+              </FitText>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'cost-nav-cell', width: columnWidthMap.costNav ?? 64 },
       },
       {
         accessorKey: 'latestNav',
@@ -1779,6 +1889,7 @@ export default function MobileFundTable({
       selectableCodes,
       batchSelectableCount,
       setAllEditSelected,
+      onFundTagsClick,
     ]
   );
 
@@ -1914,7 +2025,7 @@ export default function MobileFundTable({
   const getAlignClass = (columnId) => {
     if (columnId === 'fundName') return '';
     if (columnId === EDIT_MOVE_TO_FRONT_COL || columnId === EDIT_DRAG_COL) return 'text-center';
-    if (['latestNav', 'estimateNav', 'yesterdayChangePercent', 'estimateChangePercent', 'totalChangePercent', 'holdingDays', 'todayProfit', 'yesterdayProfit', 'holdingProfit', 'period1w', 'period1m', 'period3m', 'period6m', 'period1y'].includes(columnId)) return 'text-right';
+    if (['latestNav', 'estimateNav', 'yesterdayChangePercent', 'estimateChangePercent', 'totalChangePercent', 'holdingDays', 'todayProfit', 'yesterdayProfit', 'holdingProfit', 'holdingCost', 'costNav', 'period1w', 'period1m', 'period3m', 'period6m', 'period1y', 'tags'].includes(columnId)) return 'text-right';
     return 'text-right';
   };
 

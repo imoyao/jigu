@@ -2,6 +2,7 @@ import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 import AnalyticsGate from './components/AnalyticsGate';
 import { Analytics } from "@vercel/analytics/next";
+import KeepScreenAwake from './components/KeepScreenAwake';
 import PwaRegister from './components/PwaRegister';
 import ThemeColorSync from './components/ThemeColorSync';
 import { QueryClientProviderWrapper } from './providers/query-client-provider';
@@ -36,6 +37,7 @@ export default function RootLayout({ children }) {
     </head>
     <body>
       <ThemeColorSync />
+      <KeepScreenAwake />
       <PwaRegister />
       <AnalyticsGate GA_ID={GA_ID} />
       <QueryClientProviderWrapper>{children}</QueryClientProviderWrapper>

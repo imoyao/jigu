@@ -38,8 +38,14 @@ import {
 import { DragIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon, FolderPlusIcon, LinkIcon } from './Icons';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
 import MoveGroupModal from './MoveGroupModal';
+import { Badge } from '@/components/ui/badge';
+import { getTagThemeBadgeProps } from '@/app/components/AddTagDialog';
+import { cn } from '@/lib/utils';
+
+const TAGS_COLUMN_ID = 'tags';
 
 const NON_FROZEN_COLUMN_IDS = [
+  'tags',
   'relatedSector',
   'yesterdayChangePercent',
   'estimateChangePercent',
@@ -55,8 +61,17 @@ const NON_FROZEN_COLUMN_IDS = [
   'period6m',
   'period1y',
   'holdingAmount',
+  'holdingCost',
+  'costNav',
   'estimateNav',
 ];
+
+/** 已保存列显示偏好时，新增列默认隐藏；未保存时随「全展示」 */
+const PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set(['tags', 'holdingCost', 'costNav']);
+
+/** 非冻结列中右对齐的（标签列左对齐） */
+const isPcDataColumnRightAligned = (id) =>
+  id !== TAGS_COLUMN_ID && NON_FROZEN_COLUMN_IDS.includes(id);
 
 const COLUMN_HEADERS = {
   relatedSector: '关联板块',
@@ -71,10 +86,13 @@ const COLUMN_HEADERS = {
   estimateChangePercent: '估算涨幅',
   totalChangePercent: '估算收益',
   holdingAmount: '持仓金额',
+  holdingCost: '持仓成本',
+  costNav: '成本净值',
   holdingDays: '持有天数',
   todayProfit: '当日收益',
   yesterdayProfit: '昨日收益',
   holdingProfit: '持有收益',
+  tags: '基金标签',
 };
 
 const SortableRowContext = createContext({
@@ -164,6 +182,7 @@ function SortableRow({ row, children, isTableDragging, disabled, enableAnimation
  * @param {number} [props.stickyTop] - 表头固定时的 top 偏移（与 MobileFundTable 一致，用于适配导航栏、筛选栏等）
  * @param {boolean} [props.masked] - 是否隐藏持仓相关金额
  * @param {string} [props.relatedSectorSessionKey] - 登录用户 id（未登录传空），用于关联板块查询缓存与登录后重新拉取
+ * @param {(row: any) => void} [props.onFundTagsClick] - 点击标签列时打开编辑标签
  */
 export default function PcFundTable({
   data = [],
@@ -186,6 +205,7 @@ export default function PcFundTable({
   stickyTop = 0,
   masked = false,
   relatedSectorSessionKey = '',
+  onFundTagsClick,
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -410,7 +430,9 @@ export default function PcFundTable({
     if (vis && typeof vis === 'object' && Object.keys(vis).length > 0) {
       const next = { ...vis };
       NON_FROZEN_COLUMN_IDS.forEach((id) => {
-        if (next[id] === undefined) next[id] = true;
+        if (next[id] === undefined) {
+          next[id] = PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
+        }
       });
       return next;
     }
@@ -495,6 +517,7 @@ export default function PcFundTable({
   const onRemoveFundRef = useRef(onRemoveFund);
   const onToggleFavoriteRef = useRef(onToggleFavorite);
   const onHoldingAmountClickRef = useRef(onHoldingAmountClick);
+  const onFundTagsClickRef = useRef(onFundTagsClick);
 
   useEffect(() => {
     if (closeDialogRef) {
@@ -507,10 +530,12 @@ export default function PcFundTable({
     onRemoveFundRef.current = onRemoveFund;
     onToggleFavoriteRef.current = onToggleFavorite;
     onHoldingAmountClickRef.current = onHoldingAmountClick;
+    onFundTagsClickRef.current = onFundTagsClick;
   }, [
     onRemoveFund,
     onToggleFavorite,
     onHoldingAmountClick,
+    onFundTagsClick,
   ]);
 
   useEffect(() => {
@@ -952,6 +977,71 @@ export default function PcFundTable({
         },
       },
       {
+        id: 'tags',
+        header: '基金标签',
+        size: 168,
+        minSize: 96,
+        cell: (info) => {
+          const original = info.row.original || {};
+          const list = Array.isArray(original.fundTags) ? original.fundTags : [];
+          const hasTags = list.length > 0;
+          return (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation?.();
+                onFundTagsClickRef.current?.(original);
+              }}
+              style={{
+                width: '100%',
+                minWidth: 0,
+                border: 'none',
+                background: 'transparent',
+                padding: '4px 0',
+                cursor: onFundTagsClick ? 'pointer' : 'default',
+                textAlign: 'left',
+              }}
+              disabled={!onFundTagsClick}
+              title={onFundTagsClick ? '编辑标签' : undefined}
+            >
+              {hasTags ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 4,
+                    justifyContent: 'flex-end',
+                  }}
+                >
+                  {list.map((raw, idx) => {
+                    const item =
+                      raw && typeof raw === 'object' && raw.name != null
+                        ? {
+                            name: String(raw.name).trim(),
+                            theme: String(raw.theme ?? 'default').trim() || 'default',
+                          }
+                        : { name: String(raw).trim(), theme: 'default' };
+                    if (!item.name) return null;
+                    const { variant, className: themeCls } = getTagThemeBadgeProps(item.theme);
+                    return (
+                      <Badge key={`${item.name}-${idx}`} variant={variant} className={cn('font-normal', themeCls)}>
+                        {item.name}
+                      </Badge>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>
+        )}
+            </button>
+          );
+        },
+        meta: {
+          align: 'right',
+          cellClassName: 'tags-cell',
+        },
+      },
+      {
         id: 'relatedSector',
         header: '关联板块',
         size: 180,
@@ -1365,6 +1455,50 @@ export default function PcFundTable({
         },
       },
       {
+        accessorKey: 'holdingCost',
+        header: '持仓成本',
+        size: 135,
+        minSize: 100,
+        cell: (info) => {
+          const original = info.row.original || {};
+          if (original.holdingCostValue == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', width: '100%', minWidth: 0 }}>
+              <FitText style={{ fontWeight: 700 }} maxFontSize={14} minFontSize={10}>
+                {masked ? <span className="mask-text">******</span> : (info.getValue() ?? '—')}
+              </FitText>
+            </div>
+          );
+        },
+        meta: {
+          align: 'right',
+          cellClassName: 'holding-cost-cell',
+        },
+      },
+      {
+        accessorKey: 'costNav',
+        header: '成本净值',
+        size: 100,
+        minSize: 80,
+        cell: (info) => {
+          const original = info.row.original || {};
+          if (original.costNavValue == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          return (
+              <FitText style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10}>
+                {masked ? <span className="mask-text">******</span> : (info.getValue() ?? '—')}
+              </FitText>
+          );
+        },
+        meta: {
+          align: 'right',
+          cellClassName: 'cost-nav-cell',
+        },
+      },
+      {
         accessorKey: 'holdingDays',
         header: '持有天数',
         size: 100,
@@ -1561,6 +1695,7 @@ export default function PcFundTable({
       onMoveFunds,
       setAllSelected,
       toggleSelected,
+      onFundTagsClick,
     ],
   );
 
