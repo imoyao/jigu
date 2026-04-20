@@ -2812,7 +2812,120 @@ export default function HomePage() {
   const lastSyncedRef = useRef('');
   const skipSyncRef = useRef(false);
   const userIdRef = useRef(null);
+  const deviceIdRef = useRef('');
+  const localUpdatedAtByKeyRef = useRef({});
   const dirtyKeysRef = useRef(new Set()); // 记录发生变化的字段
+
+  const getOrCreateDeviceId = useCallback(() => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return '';
+      const key = 'deviceId';
+      const existing = String(window.localStorage.getItem(key) || '').trim();
+      if (existing) return existing;
+      const next = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/\s/g, '');
+      window.localStorage.setItem(key, next);
+      return next;
+    } catch {
+      return '';
+    }
+  }, []);
+
+  useEffect(() => {
+    deviceIdRef.current = getOrCreateDeviceId();
+  }, [getOrCreateDeviceId]);
+
+  const UPDATED_AT_BY_KEY_STORAGE = 'localUpdatedAtByKey';
+  const readLocalUpdatedAtByKey = useCallback(() => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return {};
+      const raw = window.localStorage.getItem(UPDATED_AT_BY_KEY_STORAGE);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeLocalUpdatedAtByKey = useCallback((next) => {
+    try {
+      if (typeof window === 'undefined' || !window.localStorage) return;
+      if (!isPlainObject(next)) return;
+      window.localStorage.setItem(UPDATED_AT_BY_KEY_STORAGE, JSON.stringify(next));
+    } catch { }
+  }, []);
+
+  useEffect(() => {
+    const initial = readLocalUpdatedAtByKey();
+    localUpdatedAtByKeyRef.current = initial;
+  }, [readLocalUpdatedAtByKey]);
+
+  const bumpLocalKeyUpdatedAt = useCallback((key, nowIso) => {
+    const k = String(key || '').trim();
+    if (!k) return;
+    const now = String(nowIso || '').trim();
+    if (!now) return;
+    const prev = localUpdatedAtByKeyRef.current;
+    const next = isPlainObject(prev) ? { ...prev } : {};
+    next[k] = now;
+    localUpdatedAtByKeyRef.current = next;
+    writeLocalUpdatedAtByKey(next);
+  }, [writeLocalUpdatedAtByKey]);
+
+  const extractCloudUpdatedAtByKey = useCallback((cloudData) => {
+    const meta = cloudData?.__meta;
+    const map = meta?.updatedAtByKey;
+    return isPlainObject(map) ? map : {};
+  }, []);
+
+  const getKeysToWriteFromPayload = useCallback((payload, isPartial) => {
+    // 全量同步：认为会覆盖所有参与云同步的 key（排除 __meta）
+    if (!isPartial) {
+      return [
+        'funds', 'tags', 'fundTagLists', 'favorites', 'groups',
+        'collapsedCodes', 'collapsedTrends', 'collapsedEarnings',
+        'refreshMs', 'holdings', 'groupHoldings', 'pendingTrades',
+        'transactions', 'dcaPlans', 'customSettings', 'fundDailyEarnings',
+      ];
+    }
+    if (!isPlainObject(payload)) return [];
+    return Object.keys(payload).filter((k) => k && k !== '__meta');
+  }, []);
+
+  const checkKeyConflictsBeforeSync = useCallback(async (userId, payload, isPartial) => {
+    if (!isSupabaseConfigured || !userId) return { hasConflict: false, conflictKeys: [], cloudData: null };
+    try {
+      const { data: meta, error } = await supabase
+        .from('user_configs')
+        .select('id, data, updated_at')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) throw error;
+      const cloudData = meta?.data;
+      if (!isPlainObject(cloudData)) return { hasConflict: false, conflictKeys: [], cloudData: null };
+
+      const keysToWrite = getKeysToWriteFromPayload(payload, isPartial);
+      if (keysToWrite.length === 0) return { hasConflict: false, conflictKeys: [], cloudData: null };
+
+      const cloudMap = extractCloudUpdatedAtByKey(cloudData);
+      const localMap = isPlainObject(localUpdatedAtByKeyRef.current) ? localUpdatedAtByKeyRef.current : {};
+
+      const conflicts = [];
+      for (const k of keysToWrite) {
+        const cloudTs = String(cloudMap?.[k] || '').trim();
+        if (!cloudTs) continue;
+        const localTs = String(localMap?.[k] || '').trim();
+        // 本地没有记录时，视为“未知”，不拦截；只有明确云端更新更晚才拦截
+        if (!localTs) continue;
+        if (cloudTs > localTs) conflicts.push(k);
+      }
+
+      if (conflicts.length === 0) return { hasConflict: false, conflictKeys: [], cloudData: null };
+      return { hasConflict: true, conflictKeys: conflicts, cloudData };
+    } catch (e) {
+      // 检查失败不阻塞同步
+      return { hasConflict: false, conflictKeys: [], cloudData: null };
+    }
+  }, [extractCloudUpdatedAtByKey, getKeysToWriteFromPayload]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -2930,6 +3043,7 @@ export default function HomePage() {
           const now = nowInTz().toISOString();
           window.localStorage.setItem('localUpdatedAt', now);
           setLastSyncTime(now);
+          bumpLocalKeyUpdatedAt(key, now);
         }
         scheduleSync();
       }
@@ -4109,6 +4223,8 @@ export default function HomePage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'user_configs', filter: `user_id=eq.${user.id}` }, async (payload) => {
         const incoming = payload?.new?.data;
         if (!isPlainObject(incoming)) return;
+        const incomingDeviceId = String(incoming?.__meta?.deviceId || '').trim();
+        if (incomingDeviceId && incomingDeviceId === deviceIdRef.current) return;
         const incomingComparable = getComparablePayload(incoming);
         if (!incomingComparable || incomingComparable === lastSyncedRef.current) return;
         await applyCloudConfig(incoming, payload.new.updated_at);
@@ -4116,6 +4232,8 @@ export default function HomePage() {
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'user_configs', filter: `user_id=eq.${user.id}` }, async (payload) => {
         const incoming = payload?.new?.data;
         if (!isPlainObject(incoming)) return;
+        const incomingDeviceId = String(incoming?.__meta?.deviceId || '').trim();
+        if (incomingDeviceId && incomingDeviceId === deviceIdRef.current) return;
         const incomingComparable = getComparablePayload(incoming);
         if (!incomingComparable || incomingComparable === lastSyncedRef.current) return;
         await applyCloudConfig(incoming, payload.new.updated_at);
@@ -6112,11 +6230,13 @@ export default function HomePage() {
       if (cloudUpdatedAt) {
         storageHelper.setItem('localUpdatedAt', cloudUpdatedAt);
       }
+      const cloudKeyMap = extractCloudUpdatedAtByKey(cloudData);
       const nextFunds = Array.isArray(cloudData.funds)
         ? dedupeByCode(cloudData.funds.map(stripLegacyTagsFromFundObject))
         : [];
       setFunds(nextFunds);
       storageHelper.setItem('funds', JSON.stringify(nextFunds));
+      if (cloudKeyMap?.funds) bumpLocalKeyUpdatedAt('funds', cloudKeyMap.funds);
       const nextFundCodes = new Set(nextFunds.map((f) => f.code));
 
       if (hasOwn(cloudData, 'tags')) {
@@ -6136,6 +6256,7 @@ export default function HomePage() {
           .filter(Boolean);
         setFundTagRecords(cleanedTagRows);
         storageHelper.setItem('tags', JSON.stringify(cleanedTagRows));
+        if (cloudKeyMap?.tags) bumpLocalKeyUpdatedAt('tags', cloudKeyMap.tags);
       } else {
         try {
           const localTags = JSON.parse(localStorage.getItem('tags') || '[]');
@@ -6167,12 +6288,14 @@ export default function HomePage() {
         }
         setFundTagListsByCode(merged);
         storageHelper.setItem('fundTagLists', JSON.stringify(merged));
+        if (cloudKeyMap?.fundTagLists) bumpLocalKeyUpdatedAt('fundTagLists', cloudKeyMap.fundTagLists);
       }
 
       // favorites 必须是字符串 code，且必须存在于 funds 中
       const nextFavorites = cleanCodeArray(cloudData.favorites, nextFundCodes);
       setFavorites(new Set(nextFavorites));
       storageHelper.setItem('favorites', JSON.stringify(nextFavorites));
+      if (cloudKeyMap?.favorites) bumpLocalKeyUpdatedAt('favorites', cloudKeyMap.favorites);
 
       const nextGroups = Array.isArray(cloudData.groups)
         ? cloudData.groups
@@ -6186,19 +6309,23 @@ export default function HomePage() {
         : [];
       setGroups(nextGroups);
       storageHelper.setItem('groups', JSON.stringify(nextGroups));
+      if (cloudKeyMap?.groups) bumpLocalKeyUpdatedAt('groups', cloudKeyMap.groups);
 
       const nextCollapsed = Array.isArray(cloudData.collapsedCodes) ? cloudData.collapsedCodes : [];
       setCollapsedCodes(new Set(nextCollapsed));
       storageHelper.setItem('collapsedCodes', JSON.stringify(nextCollapsed));
+      if (cloudKeyMap?.collapsedCodes) bumpLocalKeyUpdatedAt('collapsedCodes', cloudKeyMap.collapsedCodes);
 
       const nextRefreshMs = Number.isFinite(cloudData.refreshMs) && cloudData.refreshMs >= 5000 ? cloudData.refreshMs : 30000;
       setRefreshMs(nextRefreshMs);
       setTempSeconds(Math.round(nextRefreshMs / 1000));
       storageHelper.setItem('refreshMs', String(nextRefreshMs));
+      if (cloudKeyMap?.refreshMs) bumpLocalKeyUpdatedAt('refreshMs', cloudKeyMap.refreshMs);
 
       const nextHoldings = isPlainObject(cloudData.holdings) ? cloudData.holdings : {};
       setHoldings(nextHoldings);
       storageHelper.setItem('holdings', JSON.stringify(nextHoldings));
+      if (cloudKeyMap?.holdings) bumpLocalKeyUpdatedAt('holdings', cloudKeyMap.holdings);
 
       const cloudGroupIds = new Set(nextGroups.map((g) => g?.id).filter(Boolean));
 
@@ -6209,6 +6336,7 @@ export default function HomePage() {
       }
       setGroupHoldings(nextGroupHoldings);
       storageHelper.setItem('groupHoldings', JSON.stringify(nextGroupHoldings));
+      if (cloudKeyMap?.groupHoldings) bumpLocalKeyUpdatedAt('groupHoldings', cloudKeyMap.groupHoldings);
 
       // 兼容：旧版本云端 data 可能不包含 pendingTrades / transactions / dcaPlans 字段。
       // 若字段缺失，必须保留本地，避免“更新后云端覆盖导致记录清空”。
@@ -6222,6 +6350,7 @@ export default function HomePage() {
           : [];
         setPendingTrades(nextPendingTrades);
         storageHelper.setItem('pendingTrades', JSON.stringify(nextPendingTrades));
+        if (cloudKeyMap?.pendingTrades) bumpLocalKeyUpdatedAt('pendingTrades', cloudKeyMap.pendingTrades);
       } else {
         try {
           const localPending = JSON.parse(localStorage.getItem('pendingTrades') || '[]');
@@ -6233,6 +6362,7 @@ export default function HomePage() {
         const nextTransactions = isPlainObject(cloudData.transactions) ? cloudData.transactions : {};
         setTransactions(nextTransactions);
         storageHelper.setItem('transactions', JSON.stringify(nextTransactions));
+        if (cloudKeyMap?.transactions) bumpLocalKeyUpdatedAt('transactions', cloudKeyMap.transactions);
       } else {
         try {
           const localTx = JSON.parse(localStorage.getItem('transactions') || '{}');
@@ -6256,6 +6386,7 @@ export default function HomePage() {
         if (!nextDcaPlans[DCA_SCOPE_GLOBAL]) nextDcaPlans[DCA_SCOPE_GLOBAL] = {};
         setDcaPlans(nextDcaPlans);
         storageHelper.setItem('dcaPlans', JSON.stringify(nextDcaPlans));
+        if (cloudKeyMap?.dcaPlans) bumpLocalKeyUpdatedAt('dcaPlans', cloudKeyMap.dcaPlans);
       } else {
         try {
           const localDca = JSON.parse(localStorage.getItem('dcaPlans') || '{}');
@@ -6297,11 +6428,13 @@ export default function HomePage() {
       }, {});
       setFundDailyEarnings(nextFundDailyEarnings);
       storageHelper.setItem('fundDailyEarnings', JSON.stringify(nextFundDailyEarnings));
+      if (cloudKeyMap?.fundDailyEarnings) bumpLocalKeyUpdatedAt('fundDailyEarnings', cloudKeyMap.fundDailyEarnings);
 
       if (isPlainObject(cloudData.customSettings)) {
         try {
           const merged = { ...JSON.parse(localStorage.getItem('customSettings') || '{}'), ...cloudData.customSettings };
           window.localStorage.setItem('customSettings', JSON.stringify(merged));
+          if (cloudKeyMap?.customSettings) bumpLocalKeyUpdatedAt('customSettings', cloudKeyMap.customSettings);
         } catch { }
       }
 
@@ -6376,6 +6509,11 @@ export default function HomePage() {
   };
 
   const syncUserConfig = async (userId, showTip = true, payload = null, isPartial = false) => {
+    const skipConflictCheck = Boolean(payload && payload.__skipConflictCheck);
+    if (skipConflictCheck && isPlainObject(payload)) {
+      // 内部标记字段，不应被同步到云端
+      delete payload.__skipConflictCheck;
+    }
     if (!userId) {
       showToast(`userId 不存在，请重新登录`, 'error');
       return;
@@ -6383,7 +6521,43 @@ export default function HomePage() {
     try {
       setIsSyncing(true);
       const dataToSync = payload || collectLocalPayload(); // Fallback to full sync if no payload
+      const deviceId = deviceIdRef.current || getOrCreateDeviceId();
+      if (deviceId) {
+        deviceIdRef.current = deviceId;
+        dataToSync.__meta = {
+          ...(isPlainObject(dataToSync.__meta) ? dataToSync.__meta : {}),
+          deviceId,
+        };
+      }
       const now = nowInTz().toISOString();
+      // 为即将写入的 key 打上写入时间戳（用于其它设备冲突检测）
+      const keysToWrite = getKeysToWriteFromPayload(payload, isPartial);
+      if (keysToWrite.length) {
+        const prevMeta = isPlainObject(dataToSync.__meta) ? dataToSync.__meta : {};
+        const prevMap = isPlainObject(prevMeta.updatedAtByKey) ? prevMeta.updatedAtByKey : {};
+        const nextMap = { ...prevMap };
+        keysToWrite.forEach((k) => {
+          nextMap[k] = now;
+        });
+        dataToSync.__meta = { ...prevMeta, updatedAtByKey: nextMap };
+      }
+
+      // 冲突检查：发现云端某些 key 更“新”，则弹窗让用户选择
+      if (!skipConflictCheck) {
+        const conflict = await checkKeyConflictsBeforeSync(userId, payload, isPartial);
+        if (conflict?.hasConflict) {
+          setCloudConfigModal({
+            open: true,
+            userId,
+            type: 'conflictKeys',
+            cloudData: conflict.cloudData,
+            conflictKeys: conflict.conflictKeys,
+            pendingPayload: payload,
+            pendingIsPartial: isPartial,
+          });
+          return;
+        }
+      }
 
       if (isPartial) {
         // 增量更新：使用 RPC 调用
@@ -6439,6 +6613,12 @@ export default function HomePage() {
   const handleSyncLocalConfig = async () => {
     const userId = cloudConfigModal.userId;
     setCloudConfigModal({ open: false, userId: null });
+    if (cloudConfigModal.type === 'conflictKeys') {
+      const pending = isPlainObject(cloudConfigModal.pendingPayload) ? { ...cloudConfigModal.pendingPayload } : null;
+      if (pending) pending.__skipConflictCheck = true;
+      await syncUserConfig(userId, true, pending, Boolean(cloudConfigModal.pendingIsPartial));
+      return;
+    }
     await syncUserConfig(userId);
   };
 
@@ -8442,9 +8622,10 @@ export default function HomePage() {
         {cloudConfigModal.open && (
           <CloudConfigModal
             type={cloudConfigModal.type}
+            conflictKeys={cloudConfigModal.conflictKeys}
             onConfirm={handleSyncLocalConfig}
             onCancel={() => {
-              if (cloudConfigModal.type === 'conflict' && cloudConfigModal.cloudData) {
+              if ((cloudConfigModal.type === 'conflict' || cloudConfigModal.type === 'conflictKeys') && cloudConfigModal.cloudData) {
                 applyCloudConfig(cloudConfigModal.cloudData);
               }
               setCloudConfigModal({ open: false, userId: null });

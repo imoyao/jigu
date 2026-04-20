@@ -1,13 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import ConfirmModal from './ConfirmModal';
 import { CloseIcon, CloudIcon } from './Icons';
 
-export default function CloudConfigModal({ onConfirm, onCancel, type = 'empty' }) {
+export default function CloudConfigModal({ onConfirm, onCancel, type = 'empty', conflictKeys = [] }) {
   const [pendingAction, setPendingAction] = useState(null); // 'local' | 'cloud' | null
-  const isConflict = type === 'conflict';
+  const isConflict = type === 'conflict' || type === 'conflictKeys';
+  const conflictKeysText = useMemo(() => {
+    const list = Array.isArray(conflictKeys) ? conflictKeys.map((x) => String(x || '').trim()).filter(Boolean) : [];
+    if (list.length === 0) return '';
+    return list.join('、');
+  }, [conflictKeys]);
 
   const handlePrimaryClick = () => {
     if (isConflict) {
@@ -48,6 +53,13 @@ export default function CloudConfigModal({ onConfirm, onCancel, type = 'empty' }
       ? '此操作会将当前本地配置同步到云端，覆盖云端原有配置，且可能无法恢复，请谨慎操作。'
       : '此操作会使用云端配置覆盖当前本地配置，导致本地修改丢失，且可能无法恢复，请谨慎操作。';
 
+  const titleText = isConflict ? '发现配置冲突' : '云端暂无配置';
+  const descText = isConflict
+    ? type === 'conflictKeys' && conflictKeysText
+      ? `检测到以下数据在云端更新更晚：${conflictKeysText}。请选择操作：`
+      : '检测到本地配置与云端不一致，请选择操作：'
+    : '是否将本地配置同步到云端？';
+
   return (
     <motion.div
       className="modal-overlay"
@@ -70,7 +82,7 @@ export default function CloudConfigModal({ onConfirm, onCancel, type = 'empty' }
         <div className="title" style={{ marginBottom: 12, justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <CloudIcon width="20" height="20" />
-            <span>{isConflict ? '发现配置冲突' : '云端暂无配置'}</span>
+            <span>{titleText}</span>
           </div>
           {!isConflict && (
             <button className="icon-button" onClick={onCancel} style={{ border: 'none', background: 'transparent' }}>
@@ -79,9 +91,7 @@ export default function CloudConfigModal({ onConfirm, onCancel, type = 'empty' }
           )}
         </div>
         <p className="muted" style={{ marginBottom: 20, fontSize: '14px', lineHeight: '1.6' }}>
-          {isConflict
-            ? '检测到本地配置与云端不一致，请选择操作：'
-            : '是否将本地配置同步到云端？'}
+          {descText}
         </p>
         <div className="row" style={{ flexDirection: 'column', gap: 12 }}>
           <button className="button secondary" onClick={handlePrimaryClick}>
