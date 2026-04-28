@@ -971,6 +971,34 @@ export default function MobileFundTable({
     if (!Array.isArray(data) || data.length === 0) return;
 
     const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
+    const cachedBatch = {};
+    for (const code of codes) {
+      if (!periodReturnsCacheRef.current.has(code)) continue;
+      cachedBatch[code] = periodReturnsCacheRef.current.get(code);
+    }
+    if (Object.keys(cachedBatch).length > 0) {
+      setPeriodReturnsByCode((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [code, value] of Object.entries(cachedBatch)) {
+          const prevVal = next[code];
+          if (
+            prevVal
+            && prevVal.week === value.week
+            && prevVal.month === value.month
+            && prevVal.month3 === value.month3
+            && prevVal.month6 === value.month6
+            && prevVal.year1 === value.year1
+          ) {
+            continue;
+          }
+          next[code] = value;
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
+    }
+
     const missing = codes.filter((code) => !periodReturnsCacheRef.current.has(code));
     if (missing.length === 0) return;
 

@@ -796,22 +796,16 @@ export default function PcFundTable({
     if (!periodReturnsEnabled) return;
     if (dataCodes.length === 0) return;
 
-    const missing = dataCodes.filter((code) => !periodReturnsCacheRef.current.has(code));
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      const batch = {};
-      await asyncPool(4, missing, async (code) => {
-        const value = await fetchFundPeriodReturns(code);
-        periodReturnsCacheRef.current.set(code, value);
-        batch[code] = value;
-      });
-      if (cancelled) return;
+    const cachedBatch = {};
+    for (const code of dataCodes) {
+      if (!periodReturnsCacheRef.current.has(code)) continue;
+      cachedBatch[code] = periodReturnsCacheRef.current.get(code);
+    }
+    if (Object.keys(cachedBatch).length > 0) {
       setPeriodReturnsByCode((prev) => {
         let changed = false;
         const next = { ...prev };
-        for (const [code, value] of Object.entries(batch)) {
+        for (const [code, value] of Object.entries(cachedBatch)) {
           const prevVal = next[code];
           if (
             prevVal
@@ -827,6 +821,32 @@ export default function PcFundTable({
           changed = true;
         }
         return changed ? next : prev;
+      });
+    }
+
+    const missing = dataCodes.filter((code) => !periodReturnsCacheRef.current.has(code));
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      await asyncPool(4, missing, async (code) => {
+        const value = await fetchFundPeriodReturns(code);
+        periodReturnsCacheRef.current.set(code, value);
+        if (cancelled) return;
+        setPeriodReturnsByCode((prev) => {
+          const prevVal = prev[code];
+          if (
+            prevVal
+            && prevVal.week === value.week
+            && prevVal.month === value.month
+            && prevVal.month3 === value.month3
+            && prevVal.month6 === value.month6
+            && prevVal.year1 === value.year1
+          ) {
+            return prev;
+          }
+          return { ...prev, [code]: value };
+        });
       });
     })();
 
