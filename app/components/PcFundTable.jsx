@@ -198,6 +198,9 @@ export default function PcFundTable({
   onHoldingAmountClick,
   onHoldingProfitClick, // 保留以兼容调用方，表格内已不再使用点击切换
   sortBy = 'default',
+  sortOrder = 'desc',
+  sortRules = [],
+  onSortChange,
   onReorder,
   onCustomSettingsChange,
   getFundCardProps,
@@ -1864,19 +1867,76 @@ export default function PcFundTable({
             header.column.columnDef?.accessorKey === 'fundName';
           const isRightAligned = NON_FROZEN_COLUMN_IDS.includes(header.column.id);
           const align = isNameColumn ? '' : isRightAligned ? 'text-right' : 'text-center';
+
+          // 匹配排序状态
+          const colId = header.column.id || header.column.columnDef?.accessorKey;
+          const sortMap = {
+            'fundName': 'name',
+            'yesterdayChangePercent': 'yesterdayIncrease',
+            'estimateChangePercent': 'yield',
+            'totalChangePercent': 'holding', // 实际是估算收益/持有收益
+            'holdingAmount': 'holdingAmount',
+            'todayProfit': 'todayProfit',
+            'yesterdayProfit': 'yesterdayProfit',
+            'holdingProfit': 'holding',
+            'holdingDays': 'holdingDays',
+            'holdingCost': 'holdingCost',
+            'period1w': 'last1Week',
+            'period1m': 'last1Month',
+            'period3m': 'last3Months',
+            'period6m': 'last6Months',
+            'period1y': 'last1Year'
+          };
+          const sortKey = sortMap[colId];
+          const isSorted = sortBy && sortKey === sortBy;
+          let isSortEnabled = sortKey && sortRules.find(r => r.id === sortKey)?.enabled;
+          
+          // 选择默认排序的时候，隐藏基金名称表头的排序和箭头
+          if (sortBy === 'default' && sortKey === 'name') {
+            isSortEnabled = false;
+          }
+
           return (
             <div
               key={header.id}
-              className={`table-header-cell ${align}`}
-              style={style}
+              className={`table-header-cell ${align} ${isSortEnabled ? 'sortable' : ''}`}
+              style={{
+                ...style,
+                cursor: isSortEnabled ? 'pointer' : 'default',
+                userSelect: isSortEnabled ? 'none' : 'auto'
+              }}
+              onClick={() => {
+                if (isSortEnabled && onSortChange) {
+                  onSortChange(sortKey);
+                }
+              }}
             >
-              <div style={{ paddingRight: isRightAligned ? '20px' : '0' }}>
+              <div style={{
+                paddingRight: isRightAligned ? '20px' : '0',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4
+              }}>
                 {header.isPlaceholder
                   ? null
                   : flexRender(
                     header.column.columnDef.header,
                     header.getContext(),
                   )}
+                {isSortEnabled && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      flexDirection: 'column',
+                      lineHeight: 1,
+                      fontSize: '8px',
+                      opacity: isSorted ? 1 : 0.3
+                    }}
+                  >
+                    <span style={{ opacity: isSorted && sortOrder === 'asc' ? 1 : 0.3 }}>▲</span>
+                    <span style={{ opacity: isSorted && sortOrder === 'desc' ? 1 : 0.3 }}>▼</span>
+                  </span>
+                )}
               </div>
               {!forPortal && (
                 <div
@@ -1884,6 +1944,7 @@ export default function PcFundTable({
                   onTouchStart={header.column.getCanResize() ? header.getResizeHandler() : undefined}
                   className={`resizer ${header.column.getIsResizing() ? 'isResizing' : ''
                     } ${header.column.getCanResize() ? '' : 'disabled'}`}
+                  onClick={(e) => e.stopPropagation()}
                 />
               )}
             </div>

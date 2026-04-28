@@ -1657,6 +1657,7 @@ input[type="number"] {
     align-items: center;
     min-width: 0;
     overflow: hidden;
+    font-size: 12px;
   }
 
   /* 移动端表格行：长按进批量/排序时尽量避免系统文字选择与 iOS 放大镜/呼出菜单（兼容 WebKit / Chromium） */

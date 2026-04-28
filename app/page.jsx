@@ -251,7 +251,8 @@ export default function HomePage() {
   // 排序状态
   const [sortBy, setSortBy] = useState('default'); // default, name, yield, yesterdayIncrease, holding, holdingAmount, todayProfit
   const [sortOrder, setSortOrder] = useState('desc'); // asc | desc
-  const [sortDisplayMode, setSortDisplayMode] = useState('buttons'); // buttons | dropdown
+  const [pcSortDisplayMode, setPcSortDisplayMode] = useState('buttons'); // buttons | dropdown
+  const [mobileSortDisplayMode, setMobileSortDisplayMode] = useState('buttons'); // buttons | dropdown
   const [isSortLoaded, setIsSortLoaded] = useState(false);
   const [sortRules, setSortRules] = useState(DEFAULT_SORT_RULES);
   const [sortSettingOpen, setSortSettingOpen] = useState(false);
@@ -272,13 +273,24 @@ export default function HomePage() {
           if (Array.isArray(parsed.localSortRules)) {
             rulesFromSettings = parsed.localSortRules;
           }
-          if (
-            parsed &&
-            typeof parsed.localSortDisplayMode === 'string' &&
-            SORT_DISPLAY_MODES.has(parsed.localSortDisplayMode)
-          ) {
-            setSortDisplayMode(parsed.localSortDisplayMode);
+          
+          let pcMode = 'buttons';
+          let mobileMode = 'buttons';
+
+          if (parsed && typeof parsed.localSortDisplayMode === 'string' && SORT_DISPLAY_MODES.has(parsed.localSortDisplayMode)) {
+            pcMode = parsed.localSortDisplayMode;
+            mobileMode = parsed.localSortDisplayMode;
+          } else {
+            if (parsed && typeof parsed.pcLocalSortDisplayMode === 'string' && SORT_DISPLAY_MODES.has(parsed.pcLocalSortDisplayMode)) {
+              pcMode = parsed.pcLocalSortDisplayMode;
+            }
+            if (parsed && typeof parsed.mobileLocalSortDisplayMode === 'string' && SORT_DISPLAY_MODES.has(parsed.mobileLocalSortDisplayMode)) {
+              mobileMode = parsed.mobileLocalSortDisplayMode;
+            }
           }
+
+          setPcSortDisplayMode(pcMode);
+          setMobileSortDisplayMode(mobileMode);
         }
       } catch {
         // ignore
@@ -345,14 +357,19 @@ export default function HomePage() {
         const next = {
           ...(parsed && typeof parsed === 'object' ? parsed : {}),
           localSortRules: sortRules,
-          localSortDisplayMode: sortDisplayMode,
+          pcLocalSortDisplayMode: pcSortDisplayMode,
+          mobileLocalSortDisplayMode: mobileSortDisplayMode,
         };
+        // 删除旧的字段以兼容历史数据
+        if ('localSortDisplayMode' in next) {
+          delete next.localSortDisplayMode;
+        }
         setCustomSettings(next);
       } catch {
         // ignore
       }
     }
-  }, [sortBy, sortOrder, sortRules, sortDisplayMode, isSortLoaded]);
+  }, [sortBy, sortOrder, sortRules, pcSortDisplayMode, mobileSortDisplayMode, isSortLoaded]);
 
   // 当用户关闭某个排序规则时，如果当前 sortBy 不再可用，则自动切换到第一个启用的规则
   useEffect(() => {
@@ -6009,7 +6026,15 @@ export default function HomePage() {
             typeof merged.localSortDisplayMode === 'string' &&
             SORT_DISPLAY_MODES.has(merged.localSortDisplayMode)
           ) {
-            setSortDisplayMode(merged.localSortDisplayMode);
+            setPcSortDisplayMode(merged.localSortDisplayMode);
+            setMobileSortDisplayMode(merged.localSortDisplayMode);
+          } else {
+            if (typeof merged.pcLocalSortDisplayMode === 'string' && SORT_DISPLAY_MODES.has(merged.pcLocalSortDisplayMode)) {
+              setPcSortDisplayMode(merged.pcLocalSortDisplayMode);
+            }
+            if (typeof merged.mobileLocalSortDisplayMode === 'string' && SORT_DISPLAY_MODES.has(merged.mobileLocalSortDisplayMode)) {
+              setMobileSortDisplayMode(merged.mobileLocalSortDisplayMode);
+            }
           }
         } catch { }
       }
@@ -6416,7 +6441,15 @@ export default function HomePage() {
               setSortRules(mergedSettings.localSortRules);
             }
             if (mergedSettings.localSortDisplayMode && SORT_DISPLAY_MODES.has(mergedSettings.localSortDisplayMode)) {
-              setSortDisplayMode(mergedSettings.localSortDisplayMode);
+              setPcSortDisplayMode(mergedSettings.localSortDisplayMode);
+              setMobileSortDisplayMode(mergedSettings.localSortDisplayMode);
+            } else {
+              if (mergedSettings.pcLocalSortDisplayMode && SORT_DISPLAY_MODES.has(mergedSettings.pcLocalSortDisplayMode)) {
+                setPcSortDisplayMode(mergedSettings.pcLocalSortDisplayMode);
+              }
+              if (mergedSettings.mobileLocalSortDisplayMode && SORT_DISPLAY_MODES.has(mergedSettings.mobileLocalSortDisplayMode)) {
+                setMobileSortDisplayMode(mergedSettings.mobileLocalSortDisplayMode);
+              }
             }
             if (typeof mergedSettings.pcContainerWidth === 'number' && Number.isFinite(mergedSettings.pcContainerWidth)) {
               setContainerWidth(Math.min(2000, Math.max(600, mergedSettings.pcContainerWidth)));
@@ -7310,7 +7343,7 @@ export default function HomePage() {
                   <span className="muted">排序</span>
                   <SettingsIcon width="14" height="14" />
                 </button>
-                {sortDisplayMode === 'dropdown' ? (
+                { (isMobile ? mobileSortDisplayMode : pcSortDisplayMode) === 'dropdown' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <Select
                       value={sortBy}
@@ -7503,6 +7536,16 @@ export default function HomePage() {
                                 groups={groups}
                                 favorites={favorites}
                                 sortBy={sortBy}
+                                sortOrder={sortOrder}
+                                sortRules={sortRules}
+                                onSortChange={(id) => {
+                                  if (sortBy === id) {
+                                    setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                                  } else {
+                                    setSortBy(id);
+                                    setSortOrder('desc');
+                                  }
+                                }}
                                 onReorder={handleReorder}
                                 onRemoveFund={handleRemoveFundEntry}
                                 onRemoveFunds={removeFundsFromCurrentTabHandler}
@@ -7531,6 +7574,16 @@ export default function HomePage() {
                         onMoveFunds={handleMoveFunds}
                         favorites={favorites}
                         sortBy={sortBy}
+                        sortOrder={sortOrder}
+                        sortRules={sortRules}
+                        onSortChange={(id) => {
+                          if (sortBy === id) {
+                            setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+                          } else {
+                            setSortBy(id);
+                            setSortOrder('desc');
+                          }
+                        }}
                         stickyTop={navbarHeight + filterBarHeight + marketIndexAccordionHeight}
                         blockDrawerClose={!!fundDeleteConfirm || !!fundDeleteBulkConfirm}
                         closeDrawerRef={fundDetailDrawerCloseRef}
@@ -8414,8 +8467,8 @@ export default function HomePage() {
             isMobile={isMobile}
             rules={sortRules}
             onChangeRules={setSortRules}
-            sortDisplayMode={sortDisplayMode}
-            onChangeSortDisplayMode={setSortDisplayMode}
+            sortDisplayMode={isMobile ? mobileSortDisplayMode : pcSortDisplayMode}
+            onChangeSortDisplayMode={isMobile ? setMobileSortDisplayMode : setPcSortDisplayMode}
             onResetRules={() => setSortRules(DEFAULT_SORT_RULES)}
           />
         )}
