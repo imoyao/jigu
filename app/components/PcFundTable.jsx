@@ -1874,7 +1874,7 @@ export default function PcFundTable({
             'fundName': 'name',
             'yesterdayChangePercent': 'yesterdayIncrease',
             'estimateChangePercent': 'yield',
-            'totalChangePercent': 'holding', // 实际是估算收益/持有收益
+            'totalChangePercent': 'estimateProfit',
             'holdingAmount': 'holdingAmount',
             'todayProfit': 'todayProfit',
             'yesterdayProfit': 'yesterdayProfit',

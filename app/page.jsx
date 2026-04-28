@@ -238,6 +238,7 @@ export default function HomePage() {
     { id: 'yesterdayProfit', label: '昨日收益', enabled: false },
     { id: 'holdingDays', label: '持有天数', enabled: false },
     { id: 'holding', label: '持有收益', enabled: true },
+    { id: 'estimateProfit', label: '估算收益', enabled: true },
     { id: 'holdingCost', label: '持仓成本', enabled: false },
     { id: 'last1Week', label: '近1周', enabled: false },
     { id: 'last1Month', label: '近1月', enabled: false },
@@ -1467,6 +1468,33 @@ export default function HomePage() {
           const pb = profitByCode?.get(b.code);
           const valA = pa?.profitTotal;
           const valB = pb?.profitTotal;
+          const hasA = valA != null && Number.isFinite(valA);
+          const hasB = valB != null && Number.isFinite(valB);
+          if (!hasA && !hasB) return 0;
+          if (!hasA) return 1;
+          if (!hasB) return -1;
+          return sortOrder === 'asc' ? valA - valB : valB - valA;
+        }
+        if (sortBy === 'estimateProfit') {
+          const getEstimateProfitValue = (f) => {
+            const hasTodayData = f.jzrq === todayStr;
+            const holding = holdingsForTabWithLinked[f.code];
+            const profit = getHoldingProfitForTab(f, holding);
+            const total = profit ? profit.profitTotal : null;
+            if (hasTodayData) return total;
+
+            const principal = holding && isNumber(holding.cost) && isNumber(holding.share) ? holding.cost * holding.share : 0;
+            const hasTodayEstimate = !f.noValuation && isString(f.gztime) && f.gztime.startsWith(todayStr);
+            const estimateChangeValue = f.noValuation ? null : (f.estPricedCoverage > 0.05 ? (isNumber(f.estGszzl) ? Number(f.estGszzl) : null) : (isNumber(f.gszzl) ? Number(f.gszzl) : null));
+            const holdingProfitPercentValue = total != null && principal > 0 ? (total / principal) * 100 : null;
+            const hasEstimatePercent = hasTodayEstimate && estimateChangeValue != null;
+            const hasHoldingPercent = holdingProfitPercentValue != null;
+            const fallbackEstimateProfitPercentValue = hasEstimatePercent || hasHoldingPercent ? (hasEstimatePercent ? estimateChangeValue : 0) + (hasHoldingPercent ? holdingProfitPercentValue : 0) : null;
+            
+            return fallbackEstimateProfitPercentValue != null && principal > 0 ? principal * (fallbackEstimateProfitPercentValue / 100) : null;
+          };
+          const valA = getEstimateProfitValue(a);
+          const valB = getEstimateProfitValue(b);
           const hasA = valA != null && Number.isFinite(valA);
           const hasB = valB != null && Number.isFinite(valB);
           if (!hasA && !hasB) return 0;
