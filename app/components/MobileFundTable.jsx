@@ -28,8 +28,11 @@ import FitText from './FitText';
 import MobileFundCardDrawer from './MobileFundCardDrawer';
 import MobileSettingModal from './MobileSettingModal';
 import MoveGroupModal from './MoveGroupModal';
+import SuccessModal from './SuccessModal';
 import { ArrowUpToLineIcon, CloseIcon, DragIcon, FolderPlusIcon, LinkIcon, PencilIcon, SettingsIcon, StarIcon, TrashIcon } from './Icons';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
+import { storageStore } from '../stores';
+import { asyncPool } from '@/app/lib/asyncHelper';
 import { Badge } from '@/components/ui/badge';
 import { getTagThemeBadgeProps } from '@/app/components/AddTagDialog';
 import { cn } from '@/lib/utils';
@@ -332,6 +335,9 @@ export default function MobileFundTable({
   onHoldingAmountClick,
   onHoldingProfitClick, // 保留以兼容调用方，表格内已不再使用点击切换
   sortBy = 'default',
+  sortOrder = 'desc',
+  sortRules = [],
+  onSortChange,
   onReorder,
   onCustomSettingsChange,
   stickyTop = 0,
@@ -481,12 +487,34 @@ export default function MobileFundTable({
   };
 
   const groupKey = currentTab ?? 'all';
+  const currentGroupName = useMemo(() => {
+    if (groupKey === 'all') return '全部';
+    if (groupKey === 'fav') return '自选';
+    return groups.find((g) => g?.id === groupKey)?.name || '当前';
+  }, [groupKey, groups]);
+  const settingSyncOptions = useMemo(() => {
+    const baseOptions = [
+      { id: 'all', name: '全部', description: '全部分组' },
+      { id: 'fav', name: '自选', description: '自选分组' },
+      ...(Array.isArray(groups) ? groups : []).map((group) => ({
+        id: group?.id,
+        name: group?.name || '未命名',
+        description: '自定义分组',
+      })),
+    ];
+    const seen = new Set();
+    return baseOptions.filter((item) => {
+      const id = String(item?.id ?? '').trim();
+      if (!id || id === groupKey || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }, [groupKey, groups]);
 
   const getCustomSettingsWithMigration = () => {
     if (typeof window === 'undefined') return {};
     try {
-      const raw = window.localStorage.getItem('customSettings');
-      const parsed = raw ? JSON.parse(raw) : {};
+      const parsed = storageStore.getItem('customSettings') || {};
       if (!parsed || typeof parsed !== 'object') return {};
       if (parsed.pcTableColumnOrder != null || parsed.pcTableColumnVisibility != null || parsed.pcTableColumns != null || parsed.mobileTableColumnOrder != null || parsed.mobileTableColumnVisibility != null) {
         const all = {
@@ -503,7 +531,7 @@ export default function MobileFundTable({
         delete parsed.mobileTableColumnOrder;
         delete parsed.mobileTableColumnVisibility;
         parsed.all = all;
-        window.localStorage.setItem('customSettings', JSON.stringify(parsed));
+        storageStore.setItem('customSettings', JSON.stringify(parsed));
       }
       return parsed;
     } catch {
@@ -572,13 +600,12 @@ export default function MobileFundTable({
   const persistMobileGroupConfig = (updates) => {
     if (typeof window === 'undefined') return;
     try {
-      const raw = window.localStorage.getItem('customSettings');
-      const parsed = raw ? JSON.parse(raw) : {};
+      const parsed = storageStore.getItem('customSettings') || {};
       const group = parsed[groupKey] && typeof parsed[groupKey] === 'object' ? { ...parsed[groupKey] } : {};
       if (updates.mobileTableColumnOrder !== undefined) group.mobileTableColumnOrder = updates.mobileTableColumnOrder;
       if (updates.mobileTableColumnVisibility !== undefined) group.mobileTableColumnVisibility = updates.mobileTableColumnVisibility;
       parsed[groupKey] = group;
-      window.localStorage.setItem('customSettings', JSON.stringify(parsed));
+      storageStore.setItem('customSettings', JSON.stringify(parsed));
       setConfigByGroup((prev) => ({ ...prev, [groupKey]: { ...prev[groupKey], ...updates } }));
       onCustomSettingsChange?.();
     } catch {}
@@ -600,12 +627,11 @@ export default function MobileFundTable({
   const persistShowFullFundName = (show) => {
     if (typeof window === 'undefined') return;
     try {
-      const raw = window.localStorage.getItem('customSettings');
-      const parsed = raw ? JSON.parse(raw) : {};
+      const parsed = storageStore.getItem('customSettings') || {};
       const group = parsed[groupKey] && typeof parsed[groupKey] === 'object' ? { ...parsed[groupKey] } : {};
       group.mobileShowFullFundName = show;
       parsed[groupKey] = group;
-      window.localStorage.setItem('customSettings', JSON.stringify(parsed));
+      storageStore.setItem('customSettings', JSON.stringify(parsed));
       setConfigByGroup((prev) => ({
         ...prev,
         [groupKey]: { ...prev[groupKey], mobileShowFullFundName: show }
@@ -618,7 +644,41 @@ export default function MobileFundTable({
     persistShowFullFundName(show);
   };
 
+  const handleSyncMobileSettings = (targetIds = []) => {
+    if (!targetIds.length || typeof window === 'undefined') return false;
+    try {
+      const parsed = storageStore.getItem('customSettings') || {};
+      const payload = {
+        mobileTableColumnOrder: [...mobileColumnOrder],
+        mobileTableColumnVisibility: { ...mobileColumnVisibility },
+        mobileShowFullFundName: !!showFullFundName,
+      };
+      const targetUpdates = {};
+      targetIds.forEach((targetId) => {
+        if (!targetId || targetId === groupKey) return;
+        const group = parsed[targetId] && typeof parsed[targetId] === 'object' ? { ...parsed[targetId] } : {};
+        parsed[targetId] = { ...group, ...payload };
+        targetUpdates[targetId] = payload;
+      });
+      const syncedCount = Object.keys(targetUpdates).length;
+      if (syncedCount === 0) return false;
+      storageStore.setItem('customSettings', JSON.stringify(parsed));
+      setConfigByGroup((prev) => {
+        const next = { ...prev };
+        Object.entries(targetUpdates).forEach(([targetId, updates]) => {
+          next[targetId] = { ...next[targetId], ...updates };
+        });
+        return next;
+      });
+      onCustomSettingsChange?.();
+      return syncedCount;
+    } catch {
+      return false;
+    }
+  };
+
   const [settingModalOpen, setSettingModalOpen] = useState(false);
+  const [syncSuccessOpen, setSyncSuccessOpen] = useState(false);
 
   useEffect(() => {
     onMobileSettingModalOpenChange?.(settingModalOpen);
@@ -807,19 +867,6 @@ export default function MobileFundTable({
     setSectorQuoteByLabel({});
   }, [sectorAuthSegment]);
 
-  const runWithConcurrency = async (items, limit, worker) => {
-    const queue = [...items];
-    const runners = Array.from({ length: Math.max(1, limit) }, async () => {
-      while (queue.length) {
-        const item = queue.shift();
-        if (item == null) continue;
-
-        await worker(item);
-      }
-    });
-    await Promise.all(runners);
-  };
-
   useEffect(() => {
     if (!relatedSectorEnabled) return;
     if (!Array.isArray(data) || data.length === 0) return;
@@ -830,7 +877,7 @@ export default function MobileFundTable({
 
     let cancelled = false;
     (async () => {
-      await runWithConcurrency(missing, 4, async (code) => {
+      await asyncPool(4, missing, async (code) => {
         const value = await fetchRelatedSector(code);
         relatedSectorCacheRef.current.set(code, value);
         if (cancelled) return;
@@ -859,7 +906,7 @@ export default function MobileFundTable({
 
     let cancelled = false;
     (async () => {
-      await runWithConcurrency([...labels], 4, async (label) => {
+      await asyncPool(4, [...labels], async (label) => {
         const quote = await fetchRelatedSectorLiveQuote(label);
         if (cancelled) return;
         setSectorQuoteByLabel((prev) => {
@@ -927,12 +974,40 @@ export default function MobileFundTable({
     if (!Array.isArray(data) || data.length === 0) return;
 
     const codes = Array.from(new Set(data.map((d) => d?.code).filter(Boolean)));
+    const cachedBatch = {};
+    for (const code of codes) {
+      if (!periodReturnsCacheRef.current.has(code)) continue;
+      cachedBatch[code] = periodReturnsCacheRef.current.get(code);
+    }
+    if (Object.keys(cachedBatch).length > 0) {
+      setPeriodReturnsByCode((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const [code, value] of Object.entries(cachedBatch)) {
+          const prevVal = next[code];
+          if (
+            prevVal
+            && prevVal.week === value.week
+            && prevVal.month === value.month
+            && prevVal.month3 === value.month3
+            && prevVal.month6 === value.month6
+            && prevVal.year1 === value.year1
+          ) {
+            continue;
+          }
+          next[code] = value;
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
+    }
+
     const missing = codes.filter((code) => !periodReturnsCacheRef.current.has(code));
     if (missing.length === 0) return;
 
     let cancelled = false;
     (async () => {
-      await runWithConcurrency(missing, 4, async (code) => {
+      await asyncPool(4, missing, async (code) => {
         const value = await fetchFundPeriodReturns(code);
         periodReturnsCacheRef.current.set(code, value);
         if (cancelled) return;
@@ -1026,11 +1101,13 @@ export default function MobileFundTable({
     const holdingAmountDisplay = hasHoldingAmount ? (original.holdingAmount ?? '—') : null;
     const isFavorites = favorites?.has?.(code);
     const isGroupTab = isCustomGroupTab;
+    // 需求：移动端「表格模式」下，自定义分组的正常模式隐藏删除按钮（删除入口统一收敛到编辑模式的批量删除）
+    const showGroupDeleteButton = false;
     const editSelected = code ? editSelectedCodes.has(code) : false;
     const holdingLocked =
       (currentTab === 'all' || currentTab === 'fav') &&
       !!original.isHoldingLinked;
-    const holdingLockedTitle = '持仓来自自定义分组汇总，无法在「全部/自选」设置持仓金额';
+    const holdingLinkedTitle = '持仓来自自定义分组汇总，点击选择分组后操作';
 
     if (isEditMode) {
       return (
@@ -1115,29 +1192,31 @@ export default function MobileFundTable({
     }
 
     return (
-      <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div className="name-cell-content" style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: isCustomGroupTab? 0 : -4 }}>
         {isGroupTab ? (
-          <button
-            type="button"
-            className="icon-button"
-            onClick={(e) => {
-              e.stopPropagation?.();
-              onRemoveFundRef.current?.(original);
-            }}
-            title="删除"
-            style={{
-              backgroundColor: 'transparent',
-              flexShrink: 0,
-              opacity: 1,
-              cursor: 'pointer',
-              border: 'none',
-              height: 26,
-              width: 26,
-              marginRight: 4
-            }}
-          >
-            <TrashIcon width="18" height="18" />
-          </button>
+          showGroupDeleteButton ? (
+            <button
+              type="button"
+              className="icon-button"
+              onClick={(e) => {
+                e.stopPropagation?.();
+                onRemoveFundRef.current?.(original);
+              }}
+              title="删除"
+              style={{
+                backgroundColor: 'transparent',
+                flexShrink: 0,
+                opacity: 1,
+                cursor: 'pointer',
+                border: 'none',
+                height: 26,
+                width: 26,
+                marginRight: 4
+              }}
+            >
+              <TrashIcon width="18" height="18" />
+            </button>
+          ) : null
         ) : (
           <button
             className={`icon-button fav-button ${isFavorites ? 'active' : ''}`}
@@ -1193,19 +1272,17 @@ export default function MobileFundTable({
           {holdingAmountDisplay ? (
             <span
               className="muted code-text"
-              role={holdingLocked ? undefined : 'button'}
-              tabIndex={holdingLocked ? -1 : 0}
-              title={holdingLocked ? holdingLockedTitle : '点击设置持仓'}
-              style={{ cursor: holdingLocked ? 'not-allowed' : 'pointer' }}
+              role="button"
+              tabIndex={0}
+              title={holdingLocked ? holdingLinkedTitle : '点击设置持仓'}
+              style={{ cursor: 'pointer' }}
               onClick={(e) => {
                 e.stopPropagation?.();
-                if (holdingLocked) return;
                 onHoldingAmountClickRef.current?.(original, { hasHolding: true });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  if (holdingLocked) return;
                   onHoldingAmountClickRef.current?.(original, { hasHolding: true });
                 }
               }}
@@ -1217,19 +1294,17 @@ export default function MobileFundTable({
           ) : code ? (
             <span
               className="muted code-text"
-              role={holdingLocked ? undefined : 'button'}
-              tabIndex={holdingLocked ? -1 : 0}
-              title={holdingLocked ? holdingLockedTitle : '设置持仓'}
-              style={{ cursor: holdingLocked ? 'not-allowed' : 'pointer' }}
+              role="button"
+              tabIndex={0}
+              title={holdingLocked ? holdingLinkedTitle : '设置持仓'}
+              style={{ cursor: 'pointer' }}
               onClick={(e) => {
                 e.stopPropagation?.();
-                if (holdingLocked) return;
                 onHoldingAmountClickRef.current?.(original, { hasHolding: false });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
-                  if (holdingLocked) return;
                   onHoldingAmountClickRef.current?.(original, { hasHolding: false });
                 }
               }}
@@ -2041,15 +2116,74 @@ export default function MobileFundTable({
           const pinClass = getPinClass(columnId, true);
           const alignClass = getAlignClass(columnId);
           const isLastColumn = headerIndex === headerGroup.headers.length - 1;
+
+          // 匹配排序状态
+          const sortMap = {
+            'fundName': 'name',
+            'yesterdayChangePercent': 'yesterdayIncrease',
+            'estimateChangePercent': 'yield',
+            'totalChangePercent': 'estimateProfit',
+            'holdingAmount': 'holdingAmount',
+            'todayProfit': 'todayProfit',
+            'yesterdayProfit': 'yesterdayProfit',
+            'holdingProfit': 'holding',
+            'holdingDays': 'holdingDays',
+            'holdingCost': 'holdingCost',
+            'period1w': 'last1Week',
+            'period1m': 'last1Month',
+            'period3m': 'last3Months',
+            'period6m': 'last6Months',
+            'period1y': 'last1Year'
+          };
+          const sortKey = sortMap[columnId];
+          const isSorted = sortBy && sortKey === sortBy;
+          let isSortEnabled = sortKey && sortRules.find(r => r.id === sortKey)?.enabled;
+          
+          // 选择默认排序的时候，隐藏基金名称表头的排序和箭头
+          if (sortBy === 'default' && sortKey === 'name') {
+            isSortEnabled = false;
+          }
+
           return (
             <div
               key={header.id}
               className={`table-header-cell ${alignClass} ${pinClass}`}
-              style={isLastColumn ? { paddingRight: LAST_COLUMN_EXTRA } : undefined}
+              style={{
+                ...(isLastColumn ? { paddingRight: LAST_COLUMN_EXTRA } : {}),
+                cursor: isSortEnabled ? 'pointer' : 'default',
+                userSelect: isSortEnabled ? 'none' : 'auto'
+              }}
+              onClick={() => {
+                if (isSortEnabled && onSortChange) {
+                  onSortChange(sortKey);
+                }
+              }}
             >
-              {header.isPlaceholder
-                ? null
-                : flexRender(header.column.columnDef.header, header.getContext())}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 2,
+                justifyContent: alignClass.includes('text-center') ? 'center' : alignClass.includes('text-right') ? 'flex-end' : 'flex-start',
+                width: '100%'
+              }}>
+                {header.isPlaceholder
+                  ? null
+                  : flexRender(header.column.columnDef.header, header.getContext())}
+                {isSortEnabled && (
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      flexDirection: 'column',
+                      lineHeight: 1,
+                      fontSize: '8px',
+                      opacity: isSorted ? 1 : 0.3
+                    }}
+                  >
+                    <span style={{ opacity: isSorted && sortOrder === 'asc' ? 1 : 0.3 }}>▲</span>
+                    <span style={{ opacity: isSorted && sortOrder === 'desc' ? 1 : 0.3 }}>▼</span>
+                  </span>
+                )}
+              </div>
             </div>
           );
         })}
@@ -2200,7 +2334,23 @@ export default function MobileFundTable({
             onResetColumnVisibility={handleResetMobileColumnVisibility}
             showFullFundName={showFullFundName}
             onToggleShowFullFundName={handleToggleShowFullFundName}
+            syncOptions={settingSyncOptions}
+            currentGroupName={currentGroupName}
+            onSyncSettings={handleSyncMobileSettings}
+            onSyncSuccess={() => {
+              window.setTimeout(() => setSyncSuccessOpen(true), 0);
+            }}
           />
+        )}
+
+        {syncSuccessOpen && typeof document !== 'undefined' && ReactDOM.createPortal(
+          <SuccessModal
+            message="同步成功"
+            onClose={() => setSyncSuccessOpen(false)}
+            overlayStyle={{ zIndex: 10004 }}
+            cardStyle={{ maxWidth: '420px', width: '90vw', zIndex: 10005 }}
+          />,
+          document.body,
         )}
 
         <MobileFundCardDrawer

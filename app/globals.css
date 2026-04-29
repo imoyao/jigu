@@ -1261,7 +1261,6 @@ input[type="number"] {
 
 .fav-button {
   padding: 4px;
-  margin-right: 4px;
   color: var(--muted);
   transition: all 0.2s ease;
   background: transparent;
@@ -1639,6 +1638,7 @@ input[type="number"] {
     align-items: center;
     min-width: 0;
     overflow: hidden;
+    font-size: 12px;
   }
 
   /* 移动端表格行：长按进批量/排序时尽量避免系统文字选择与 iOS 放大镜/呼出菜单（兼容 WebKit / Chromium） */
@@ -1671,8 +1671,8 @@ input[type="number"] {
   }
 
   .mobile-fund-table .table-row .table-cell {
-    padding-top: 12px;
-    padding-bottom: 12px;
+    padding-top: 8px;
+    padding-bottom: 8px;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1775,7 +1775,7 @@ input[type="number"] {
   }
 
   .mobile-fund-table .table-row .name-cell .code-text {
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .mobile-fund-table .value-cell {
@@ -3516,6 +3516,9 @@ input[type="number"] {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
+}
+.refresh-btn-wrap.is-refreshing::before {
+  display: none;
 }
 .refresh-btn-wrap .icon-button {
   position: relative;
