@@ -1882,6 +1882,44 @@ export default function HomePage() {
             ? ''
             : `${estimateProfitPercentValue > 0 ? '+' : ''}${estimateProfitPercentValue.toFixed(2)}%`;
 
+        const addBaseNavRaw = f.addBaseNav != null && f.addBaseNav !== '' ? Number(f.addBaseNav) : null;
+        const addBaseNav = addBaseNavRaw != null && Number.isFinite(addBaseNavRaw) && addBaseNavRaw > 0 ? addBaseNavRaw : null;
+        const sinceAddedCurrentNav = (() => {
+          if (f.noValuation) {
+            const v = Number(f.dwjz);
+            return Number.isFinite(v) && v > 0 ? v : null;
+          }
+          if (f.estPricedCoverage > 0.05) {
+            const v = Number(f.estGsz);
+            return Number.isFinite(v) && v > 0 ? v : null;
+          }
+          const v = Number(f.gsz);
+          return Number.isFinite(v) && v > 0 ? v : null;
+        })();
+        const sinceAddedChangeValue =
+          addBaseNav != null && sinceAddedCurrentNav != null
+            ? ((sinceAddedCurrentNav / addBaseNav) - 1) * 100
+            : null;
+        const sinceAddedChangePercent =
+          sinceAddedChangeValue == null
+            ? '—'
+            : `${sinceAddedChangeValue > 0 ? '+' : ''}${sinceAddedChangeValue.toFixed(2)}%`;
+        const sinceAddedDateRaw = (() => {
+          const raw = f.addBaseDate;
+          const rawStr = raw != null ? String(raw) : '';
+          if (/^\d{4}-\d{2}-\d{2}/.test(rawStr)) return rawStr.slice(0, 10);
+          const ts = Number(f.addedAt);
+          if (Number.isFinite(ts) && ts > 0) return dayjs.tz(ts, TZ).format('YYYY-MM-DD');
+          return '';
+        })();
+        const sinceAddedDate = (() => {
+          const raw = sinceAddedDateRaw || '';
+          if (!raw) return '';
+          const currentYear = typeof todayStr === 'string' && todayStr.length >= 4 ? todayStr.slice(0, 4) : '';
+          if (currentYear && raw.startsWith(`${currentYear}-`) && raw.length >= 10) return raw.slice(5);
+          return raw;
+        })();
+
         const fc = String(f.code ?? '').trim();
         const listFromDerived = fundTagListsByCode[fc];
         const fundTags = Array.isArray(listFromDerived)
@@ -1915,6 +1953,10 @@ export default function HomePage() {
           estimateProfit,
           estimateProfitValue,
           estimateProfitPercent,
+          sinceAddedChangePercent,
+          sinceAddedChangeValue,
+          sinceAddedDate,
+          sinceAddedDateRaw: sinceAddedDateRaw || undefined,
           holdingAmount,
           holdingAmountValue,
           holdingCost,
@@ -4200,6 +4242,30 @@ export default function HomePage() {
     });
   };
 
+  const getAddBaseSnapshotFromFund = (fund) => {
+    const dwjz = Number(fund?.dwjz);
+    if (Number.isFinite(dwjz) && dwjz > 0) {
+      return { nav: dwjz, date: fund?.jzrq || null };
+    }
+    const gsz = Number(fund?.gsz);
+    if (Number.isFinite(gsz) && gsz > 0) {
+      return { nav: gsz, date: fund?.gztime || fund?.time || null };
+    }
+    return { nav: null, date: null };
+  };
+
+  const withAddBaseline = (fund) => {
+    const next = { ...(fund || {}) };
+    const now = Date.now();
+    if (next.addedAt == null) next.addedAt = now;
+    if (next.addBaseNav == null || next.addBaseDate == null) {
+      const snap = getAddBaseSnapshotFromFund(next);
+      if (next.addBaseNav == null && snap.nav != null) next.addBaseNav = snap.nav;
+      if (next.addBaseDate == null && snap.date) next.addBaseDate = snap.date;
+    }
+    return next;
+  };
+
   const handleScanImportConfirm = async (codes) => {
     if (!Array.isArray(codes) || codes.length === 0) return;
     const uniqueCodes = Array.from(new Set(codes));
@@ -4215,7 +4281,7 @@ export default function HomePage() {
         try {
           const data = await fetchFundData(code);
           if (data && data.code) {
-            added.push(data);
+            added.push(withAddBaseline(data));
           }
         } catch (e) {
           console.error(`通过识别导入基金 ${code} 失败`, e);
@@ -4254,7 +4320,7 @@ export default function HomePage() {
         if (funds.some(existing => existing.code === f.CODE)) return;
         try {
           const data = await fetchFundData(f.CODE);
-          newFunds.push(data);
+          newFunds.push(withAddBaseline(data));
         } catch (e) {
           console.error(`添加基金 ${f.CODE} 失败`, e);
         }
@@ -4574,7 +4640,21 @@ export default function HomePage() {
 
       // 【步骤 4】UI 与存储同步：统一更新 React 状态和本地 localStorage，减少页面重绘
       if (updated.length > 0) {
-        setFunds(prev => prev.map(f => updated.find(x => x.code === f.code) || f));
+        setFunds(prev => prev.map((f) => {
+          const next = updated.find(x => x.code === f.code);
+          if (!next) return f;
+          const merged = { ...next };
+          if (f.addedAt != null) merged.addedAt = f.addedAt;
+          if (f.addBaseNav != null) merged.addBaseNav = f.addBaseNav;
+          if (f.addBaseDate != null) merged.addBaseDate = f.addBaseDate;
+          if (merged.addedAt == null || merged.addBaseNav == null || merged.addBaseDate == null) {
+            const snap = getAddBaseSnapshotFromFund(merged);
+            if (merged.addedAt == null) merged.addedAt = Date.now();
+            if (merged.addBaseNav == null && snap.nav != null) merged.addBaseNav = snap.nav;
+            if (merged.addBaseDate == null && snap.date) merged.addBaseDate = snap.date;
+          }
+          return merged;
+        }));
         if (valuationChanged) {
           setValuationSeries(prev => {
             const next = { ...prev };
