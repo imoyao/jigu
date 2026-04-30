@@ -43,7 +43,6 @@ import {
   SettingsIcon,
   SortIcon,
   SunIcon,
-  UpdateIcon,
   UserIcon,
   CameraIcon,
   FolderPlusIcon,
@@ -68,7 +67,8 @@ import SuccessModal from "./components/SuccessModal";
 import TradeModal from "./components/TradeModal";
 import TransactionHistoryModal from "./components/TransactionHistoryModal";
 import AddHistoryModal from "./components/AddHistoryModal";
-import UpdatePromptModal from "./components/UpdatePromptModal";
+import UpdateChecker from "./components/UpdateChecker";
+import UserMenu from "./components/UserMenu";
 import RefreshButton from "./components/RefreshButton";
 import WeChatModal from "./components/WeChatModal";
 import DcaModal from "./components/DcaModal";
@@ -88,8 +88,7 @@ import {
 } from './lib/dailyEarnings';
 import { loadHolidaysForYears, isTradingDay as isDateTradingDay } from './lib/tradingCalendar';
 import { asyncPool } from './lib/asyncHelper';
-import { parseFundTextWithLLM, fetchFundData, fetchFundNetValueRange, fetchLatestRelease, fetchShanghaiIndexDate, fetchSmartFundNetValue, searchFunds, fetchFundPeriodReturns } from './api/fund';
-import packageJson from '../package.json';
+import { parseFundTextWithLLM, fetchFundData, fetchFundNetValueRange, fetchShanghaiIndexDate, fetchSmartFundNetValue, fetchSmartFundNetValueBackward, searchFunds, fetchFundPeriodReturns } from './api/fund';
 import PcFundTable from './components/PcFundTable';
 import MobileFundTable from './components/MobileFundTable';
 import FundTagsEditDialog from './components/FundTagsEditDialog';
@@ -245,6 +244,7 @@ export default function HomePage() {
     { id: 'last3Months', label: '近3月', enabled: false },
     { id: 'last6Months', label: '近6月', enabled: false },
     { id: 'last1Year', label: '近1年', enabled: false },
+    { id: 'tags', label: '基金标签', enabled: false },
     { id: 'name', label: '基金名称', alias: '名称', enabled: true },
   ];
   const SORT_DISPLAY_MODES = new Set(['buttons', 'dropdown']);
@@ -422,7 +422,6 @@ export default function HomePage() {
       deviceIdRef.current = uuidv4();
     }
   }, []);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [loginInitialError, setLoginInitialError] = useState('');
 
@@ -561,7 +560,7 @@ export default function HomePage() {
 
   const [isMobile, setIsMobile] = useState(false);
   const [hoveredPcRowCode, setHoveredPcRowCode] = useState(null); // PC 列表行悬浮高亮
-  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [isLogoutConfirmOpen, setIsLogoutConfirmOpen] = useState(false);
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const checkMobile = () => setIsMobile(window.innerWidth <= 640);
@@ -607,35 +606,7 @@ export default function HomePage() {
     if (!shouldShowMarketIndex) setMarketIndexAccordionHeight(0);
   }, [shouldShowMarketIndex]);
 
-  // 检查更新
-  const [hasUpdate, setHasUpdate] = useState(false);
-  const [latestVersion, setLatestVersion] = useState('');
-  const [updateContent, setUpdateContent] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
-
-  useEffect(() => {
-    // 未配置 GitHub 最新版本接口地址时，不进行更新检查
-    if (!process.env.NEXT_PUBLIC_GITHUB_LATEST_RELEASE_URL) return;
-
-    const checkUpdate = async () => {
-      try {
-        const data = await fetchLatestRelease();
-        if (!data?.tagName) return;
-        const remoteVersion = data.tagName.replace(/^v/, '');
-        if (remoteVersion !== packageJson.version) {
-          setHasUpdate(true);
-          setLatestVersion(remoteVersion);
-          setUpdateContent(data.body || '');
-        }
-      } catch (e) {
-        console.error('Check update failed:', e);
-      }
-    };
-
-    checkUpdate();
-    const interval = setInterval(checkUpdate, 30 * 60 * 1000); // 30 minutes
-    return () => clearInterval(interval);
-  }, []);
 
   // 存储当前被划开的基金代码
   const [swipedFundCode, setSwipedFundCode] = useState(null);
@@ -1181,6 +1152,26 @@ export default function HomePage() {
     return { derived, linked, groupIdsByCode };
   }, [currentTab, activeGroupId, funds, holdings, groupHoldings, groups]);
 
+  useEffect(() => {
+    const linkedCodes = linkedHoldingsForAllFav?.linked;
+    if (!(linkedCodes instanceof Set) || linkedCodes.size === 0) return;
+    setFundDailyEarnings((prev) => {
+      if (!isPlainObject(prev)) return prev;
+      const globalBucket = prev[DAILY_EARNINGS_SCOPE_ALL];
+      if (!isPlainObject(globalBucket)) return prev;
+      const nextGlobalBucket = { ...globalBucket };
+      let changed = false;
+      for (const code of linkedCodes) {
+        if (code in nextGlobalBucket) {
+          delete nextGlobalBucket[code];
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      return { ...prev, [DAILY_EARNINGS_SCOPE_ALL]: nextGlobalBucket };
+    });
+  }, [linkedHoldingsForAllFav, setFundDailyEarnings]);
+
   const currentFundDailyEarnings = useMemo(() => {
     if (!isPlainObject(fundDailyEarnings)) return {};
 
@@ -1293,31 +1284,23 @@ export default function HomePage() {
   const portfolioDailySeries = useMemo(
     () => {
       if (!isPlainObject(fundDailyEarnings)) return [];
-      const mergedByCode = {};
+      const byDate = new Map();
       Object.values(fundDailyEarnings).forEach((bucket) => {
         if (!isPlainObject(bucket)) return;
-        Object.entries(bucket).forEach(([code, list]) => {
+        Object.values(bucket).forEach((list) => {
           if (!Array.isArray(list) || list.length === 0) return;
-          const prev = Array.isArray(mergedByCode[code]) ? mergedByCode[code] : [];
-          // 按 scope 合并后按日期去重，避免同一基金同一天重复累计
-          const byDate = new Map();
-          [...prev, ...list].forEach((item) => {
+          list.forEach((item) => {
             const date = item?.date ? String(item.date) : '';
             const earnings = Number(item?.earnings);
-            const rateRaw = item?.rate;
-            const rate = rateRaw == null || rateRaw === '' ? null : Number(rateRaw);
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
             if (!Number.isFinite(earnings)) return;
-            byDate.set(date, {
-              date,
-              earnings,
-              rate: Number.isFinite(rate) ? rate : null,
-            });
+            byDate.set(date, (byDate.get(date) ?? 0) + earnings);
           });
-          mergedByCode[code] = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
         });
       });
-      return aggregatePortfolioDailyEarnings(mergedByCode);
+      return [...byDate.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, earnings]) => ({ date, earnings, rate: null }));
     },
     [fundDailyEarnings]
   );
@@ -1668,13 +1651,34 @@ export default function HomePage() {
           if (!hasB) return -1;
           return sortOrder === 'asc' ? valA - valB : valB - valA;
         }
+        if (sortBy === 'tags') {
+          const getTagKey = (fund) => {
+            const code = String(fund?.code ?? '').trim();
+            const list = code ? fundTagListsByCode?.[code] : null;
+            if (!Array.isArray(list) || list.length === 0) return '';
+            return list
+              .map((t) => (t?.name != null ? String(t.name).trim() : ''))
+              .filter(Boolean)
+              .join('、');
+          };
+          const keyA = getTagKey(a);
+          const keyB = getTagKey(b);
+          const hasA = !!keyA;
+          const hasB = !!keyB;
+          if (!hasA && !hasB) return 0;
+          if (!hasA) return 1;
+          if (!hasB) return -1;
+          return sortOrder === 'asc'
+            ? keyA.localeCompare(keyB, 'zh-CN')
+            : keyB.localeCompare(keyA, 'zh-CN');
+        }
         if (sortBy === 'name') {
           return sortOrder === 'asc' ? a.name.localeCompare(b.name, 'zh-CN') : b.name.localeCompare(a.name, 'zh-CN');
         }
         return 0;
       });
     },
-    [scopedFunds, currentTab, groups, sortBy, sortOrder, holdingsForTabWithLinked, getHoldingProfitForTab, groupFundSearchTerm, shouldShowGroupFundSearch, currentFundDailyEarnings, sortPeriodReturnsByCode, todayStr],
+    [scopedFunds, currentTab, groups, sortBy, sortOrder, holdingsForTabWithLinked, getHoldingProfitForTab, groupFundSearchTerm, shouldShowGroupFundSearch, currentFundDailyEarnings, sortPeriodReturnsByCode, todayStr, fundTagListsByCode],
   );
 
   const latestDailyByCode = useMemo(() => {
@@ -1848,6 +1852,44 @@ export default function HomePage() {
             ? ''
             : `${estimateProfitPercentValue > 0 ? '+' : ''}${estimateProfitPercentValue.toFixed(2)}%`;
 
+        const addBaseNavRaw = f.addBaseNav != null && f.addBaseNav !== '' ? Number(f.addBaseNav) : null;
+        const addBaseNav = addBaseNavRaw != null && Number.isFinite(addBaseNavRaw) && addBaseNavRaw > 0 ? addBaseNavRaw : null;
+        const sinceAddedCurrentNav = (() => {
+          if (f.noValuation) {
+            const v = Number(f.dwjz);
+            return Number.isFinite(v) && v > 0 ? v : null;
+          }
+          if (f.estPricedCoverage > 0.05) {
+            const v = Number(f.estGsz);
+            return Number.isFinite(v) && v > 0 ? v : null;
+          }
+          const v = Number(f.gsz);
+          return Number.isFinite(v) && v > 0 ? v : null;
+        })();
+        const sinceAddedChangeValue =
+          addBaseNav != null && sinceAddedCurrentNav != null
+            ? ((sinceAddedCurrentNav / addBaseNav) - 1) * 100
+            : null;
+        const sinceAddedChangePercent =
+          sinceAddedChangeValue == null
+            ? '—'
+            : `${sinceAddedChangeValue > 0 ? '+' : ''}${sinceAddedChangeValue.toFixed(2)}%`;
+        const sinceAddedDateRaw = (() => {
+          const raw = f.addBaseDate;
+          const rawStr = raw != null ? String(raw) : '';
+          if (/^\d{4}-\d{2}-\d{2}/.test(rawStr)) return rawStr.slice(0, 10);
+          const ts = Number(f.addedAt);
+          if (Number.isFinite(ts) && ts > 0) return dayjs.tz(ts, TZ).format('YYYY-MM-DD');
+          return '';
+        })();
+        const sinceAddedDate = (() => {
+          const raw = sinceAddedDateRaw || '';
+          if (!raw) return '';
+          const currentYear = typeof todayStr === 'string' && todayStr.length >= 4 ? todayStr.slice(0, 4) : '';
+          if (currentYear && raw.startsWith(`${currentYear}-`) && raw.length >= 10) return raw.slice(5);
+          return raw;
+        })();
+
         const fc = String(f.code ?? '').trim();
         const listFromDerived = fundTagListsByCode[fc];
         const fundTags = Array.isArray(listFromDerived)
@@ -1881,6 +1923,10 @@ export default function HomePage() {
           estimateProfit,
           estimateProfitValue,
           estimateProfitPercent,
+          sinceAddedChangePercent,
+          sinceAddedChangeValue,
+          sinceAddedDate,
+          sinceAddedDateRaw: sinceAddedDateRaw || undefined,
           holdingAmount,
           holdingAmountValue,
           holdingCost,
@@ -2104,7 +2150,13 @@ export default function HomePage() {
       }
 
       // 尝试获取智能净值
-      const result = await fetchSmartFundNetValue(trade.fundCode, queryDate);
+      const navOffsetDays = Number(trade.navOffsetDays);
+      if (Number.isFinite(navOffsetDays) && navOffsetDays) {
+        queryDate = toTz(queryDate).add(navOffsetDays, 'day').format('YYYY-MM-DD');
+      }
+      const result = (trade.netValueSearch === 'backward')
+        ? await fetchSmartFundNetValueBackward(trade.fundCode, queryDate)
+        : await fetchSmartFundNetValue(trade.fundCode, queryDate);
 
       if (result && result.value > 0) {
         // 成功获取，执行交易
@@ -2454,7 +2506,6 @@ export default function HomePage() {
   // 定投计划自动生成买入队列的逻辑会在 storageHelper 定义之后实现
 
   const handleOpenLogin = () => {
-    setUserMenuOpen(false);
     if (!isSupabaseConfigured) {
       showToast('未配置 Supabase，无法登录', 'error');
       return;
@@ -2462,7 +2513,7 @@ export default function HomePage() {
     setLoginModalOpen(true);
   };
 
-  const [updateModalOpen, setUpdateModalOpen] = useState(false);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [scanModalOpen, setScanModalOpen] = useState(false); // 扫描弹窗
   const [scanConfirmModalOpen, setScanConfirmModalOpen] = useState(false); // 扫描确认弹窗
   const [scannedFunds, setScannedFunds] = useState([]); // 扫描到的基金
@@ -3943,12 +3994,10 @@ export default function HomePage() {
   useEffect(() => {
     if (!isSupabaseConfigured) {
       clearAuthUser();
-      setUserMenuOpen(false);
       return;
     }
     const clearAuthState = () => {
       clearAuthUser();
-      setUserMenuOpen(false);
       skipSyncRef.current = false;
     };
 
@@ -4050,7 +4099,6 @@ export default function HomePage() {
     if (!isSupabaseConfigured) {
       setLoginModalOpen(false);
       setLoginInitialError('');
-      setUserMenuOpen(false);
       clearAuthUser();
       return;
     }
@@ -4087,24 +4135,9 @@ export default function HomePage() {
       } catch { }
       setLoginModalOpen(false);
       setLoginInitialError('');
-      setUserMenuOpen(false);
       clearAuthUser();
     }
   };
-
-  // 关闭用户菜单（点击外部时）
-  const userMenuRef = useRef(null);
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
-        setUserMenuOpen(false);
-      }
-    };
-    if (userMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [userMenuOpen]);
 
   const refreshCodesRef = useRef([]);
   useEffect(() => {
@@ -4166,6 +4199,30 @@ export default function HomePage() {
     });
   };
 
+  const getAddBaseSnapshotFromFund = (fund) => {
+    const dwjz = Number(fund?.dwjz);
+    if (Number.isFinite(dwjz) && dwjz > 0) {
+      return { nav: dwjz, date: fund?.jzrq || null };
+    }
+    const gsz = Number(fund?.gsz);
+    if (Number.isFinite(gsz) && gsz > 0) {
+      return { nav: gsz, date: fund?.gztime || fund?.time || null };
+    }
+    return { nav: null, date: null };
+  };
+
+  const withAddBaseline = (fund) => {
+    const next = { ...(fund || {}) };
+    const now = Date.now();
+    if (next.addedAt == null) next.addedAt = now;
+    if (next.addBaseNav == null || next.addBaseDate == null) {
+      const snap = getAddBaseSnapshotFromFund(next);
+      if (next.addBaseNav == null && snap.nav != null) next.addBaseNav = snap.nav;
+      if (next.addBaseDate == null && snap.date) next.addBaseDate = snap.date;
+    }
+    return next;
+  };
+
   const handleScanImportConfirm = async (codes) => {
     if (!Array.isArray(codes) || codes.length === 0) return;
     const uniqueCodes = Array.from(new Set(codes));
@@ -4181,7 +4238,7 @@ export default function HomePage() {
         try {
           const data = await fetchFundData(code);
           if (data && data.code) {
-            added.push(data);
+            added.push(withAddBaseline(data));
           }
         } catch (e) {
           console.error(`通过识别导入基金 ${code} 失败`, e);
@@ -4220,7 +4277,7 @@ export default function HomePage() {
         if (funds.some(existing => existing.code === f.CODE)) return;
         try {
           const data = await fetchFundData(f.CODE);
-          newFunds.push(data);
+          newFunds.push(withAddBaseline(data));
         } catch (e) {
           console.error(`添加基金 ${f.CODE} 失败`, e);
         }
@@ -4540,7 +4597,21 @@ export default function HomePage() {
 
       // 【步骤 4】UI 与存储同步：统一更新 React 状态和本地 localStorage，减少页面重绘
       if (updated.length > 0) {
-        setFunds(prev => prev.map(f => updated.find(x => x.code === f.code) || f));
+        setFunds(prev => prev.map((f) => {
+          const next = updated.find(x => x.code === f.code);
+          if (!next) return f;
+          const merged = { ...next };
+          if (f.addedAt != null) merged.addedAt = f.addedAt;
+          if (f.addBaseNav != null) merged.addBaseNav = f.addBaseNav;
+          if (f.addBaseDate != null) merged.addBaseDate = f.addBaseDate;
+          if (merged.addedAt == null || merged.addBaseNav == null || merged.addBaseDate == null) {
+            const snap = getAddBaseSnapshotFromFund(merged);
+            if (merged.addedAt == null) merged.addedAt = Date.now();
+            if (merged.addBaseNav == null && snap.nav != null) merged.addBaseNav = snap.nav;
+            if (merged.addBaseDate == null && snap.date) merged.addBaseDate = snap.date;
+          }
+          return merged;
+        }));
         if (valuationChanged) {
           setValuationSeries(prev => {
             const next = { ...prev };
@@ -6609,7 +6680,7 @@ export default function HomePage() {
       groupModalOpen ||
       successModal.open ||
       cloudConfigModal.open ||
-      logoutConfirmOpen ||
+      isLogoutConfirmOpen ||
       holdingModal.open ||
       selectHoldingGroupModal.open ||
       actionModal.open ||
@@ -6622,7 +6693,7 @@ export default function HomePage() {
       donateOpen ||
       !!fundDeleteConfirm ||
       !!fundDeleteBulkConfirm ||
-      updateModalOpen ||
+      isUpdateModalOpen ||
       weChatOpen ||
       scanModalOpen ||
       scanConfirmModalOpen ||
@@ -6642,7 +6713,7 @@ export default function HomePage() {
       groupModalOpen,
       successModal.open,
       cloudConfigModal.open,
-      logoutConfirmOpen,
+      isLogoutConfirmOpen,
       holdingModal.open,
       selectHoldingGroupModal.open,
       actionModal.open,
@@ -6654,7 +6725,7 @@ export default function HomePage() {
       clearConfirm,
       donateOpen,
       fundDeleteConfirm,
-      updateModalOpen,
+      isUpdateModalOpen,
       weChatOpen,
       scanModalOpen,
       scanConfirmModalOpen,
@@ -7074,16 +7145,7 @@ export default function HomePage() {
           {error && <div className="muted" style={{ marginTop: 8, color: 'var(--danger)' }}>{error}</div>}
         </div>
         <div className={`actions ${(isSearchFocused || selectedFunds.length > 0) ? 'search-focused-sibling' : ''}`}>
-          {hasUpdate && (
-            <div
-              className="badge"
-              title={`发现新版本 ${latestVersion}，点击前往下载`}
-              style={{ cursor: 'pointer', borderColor: 'var(--success)', color: 'var(--success)' }}
-              onClick={() => setUpdateModalOpen(true)}
-            >
-              <UpdateIcon width="14" height="14" />
-            </div>
-          )}
+          <UpdateChecker onModalOpenChange={setIsUpdateModalOpen} />
           <span className="github-icon-wrap">
             <Image unoptimized alt="项目Github地址" src={githubImg} style={{ width: '30px', height: '30px', cursor: 'pointer' }} onClick={() => window.open("https://github.com/hzm0321/real-time-fund")} />
           </span>
@@ -7107,15 +7169,6 @@ export default function HomePage() {
             fundsLength={funds.length}
             refreshCycleStartRef={refreshCycleStartRef}
           />
-          {/*<button*/}
-          {/*  className="icon-button"*/}
-          {/*  aria-label="打开设置"*/}
-          {/*  onClick={() => setSettingsOpen(true)}*/}
-          {/*  title="设置"*/}
-          {/*  hidden*/}
-          {/*>*/}
-          {/*  <SettingsIcon width="18" height="18" />*/}
-          {/*</button>*/}
           <button
             className="icon-button"
             aria-label={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
@@ -7124,162 +7177,20 @@ export default function HomePage() {
           >
             {theme === 'dark' ? <SunIcon width="18" height="18" /> : <MoonIcon width="18" height="18" />}
           </button>
-          {/* 用户菜单 */}
-          <div className="user-menu-container" ref={userMenuRef}>
-            <button
-              className={`icon-button user-menu-trigger ${user ? 'logged-in' : ''}`}
-              aria-label={user ? '用户菜单' : '登录'}
-              onClick={() => setUserMenuOpen(!userMenuOpen)}
-              title={user ? (user.email || '用户') : '用户菜单'}
-            >
-              {user ? (
-                <div className="user-avatar-small">
-                  {userAvatar ? (
-                    <Image
-                      src={userAvatar}
-                      alt="用户头像"
-                      width={20}
-                      height={20}
-                      unoptimized
-                      style={{ borderRadius: '50%' }}
-                    />
-                  ) : (
-                    (user.email?.charAt(0).toUpperCase() || 'U')
-                  )}
-                </div>
-              ) : (
-                <UserIcon width="18" height="18" />
-              )}
-            </button>
-
-            <AnimatePresence>
-              {userMenuOpen && (
-                <motion.div
-                  className="user-menu-dropdown glass"
-                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                  transition={{ duration: 0.15 }}
-                  style={{ transformOrigin: 'top right', top: navbarHeight + (isMobile ? -20 : 10) }}
-                >
-                  {user ? (
-                    <>
-                      <div className="user-menu-header">
-                        <div className="user-avatar-large">
-                          {userAvatar ? (
-                            <Image
-                              src={userAvatar}
-                              alt="用户头像"
-                              width={40}
-                              height={40}
-                              unoptimized
-                              style={{ borderRadius: '50%' }}
-                            />
-                          ) : (
-                            (user.email?.charAt(0).toUpperCase() || 'U')
-                          )}
-                        </div>
-                        <div className="user-info">
-                          <span className="user-email">{user.email}</span>
-                          <span className="user-status">已登录</span>
-                          {lastSyncTime && (
-                            <span className="muted" style={{ fontSize: '10px', marginTop: 2 }}>
-                              同步于 {dayjs(lastSyncTime).format('MM-DD HH:mm')}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="user-menu-divider" />
-                      {!isMobile && (
-                        <button
-                          className="user-menu-item"
-                          onClick={() => {
-                            setUserMenuOpen(false);
-                            setPortfolioEarningsOpen(true);
-                          }}
-                        >
-                          <CalendarIcon width="16" height="16" />
-                          <span>我的收益</span>
-                        </button>
-                      )}
-                      <button
-                        className="user-menu-item"
-                        disabled={isSyncing}
-                        onClick={async () => {
-                          setUserMenuOpen(false);
-                          if (user?.id) await syncUserConfig(user.id);
-                        }}
-                        title="手动同步配置到云端"
-                      >
-                        {isSyncing ? (
-                          <span className="loading-spinner" style={{ width: 16, height: 16, border: '2px solid var(--muted)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
-                        ) : (
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
-                            <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" stroke="var(--primary)" />
-                            <path d="M12 12v9" stroke="var(--accent)" />
-                            <path d="m16 16-4-4-4 4" stroke="var(--accent)" />
-                          </svg>
-                        )}
-                        <span>{isSyncing ? '同步中...' : '同步'}</span>
-                      </button>
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          setSettingsOpen(true);
-                        }}
-                      >
-                        <SettingsIcon width="16" height="16" />
-                        <span>设置</span>
-                      </button>
-                      <button
-                        className="user-menu-item danger"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          setLogoutConfirmOpen(true);
-                        }}
-                      >
-                        <LogoutIcon width="16" height="16" />
-                        <span>登出</span>
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        className="user-menu-item"
-                        onClick={handleOpenLogin}
-                      >
-                        <LoginIcon width="16" height="16" />
-                        <span>登录</span>
-                      </button>
-                      {!isMobile && (
-                        <button
-                          className="user-menu-item"
-                          onClick={() => {
-                            setUserMenuOpen(false);
-                            setPortfolioEarningsOpen(true);
-                          }}
-                        >
-                          <CalendarIcon width="16" height="16" />
-                          <span>我的收益</span>
-                        </button>
-                      )}
-                      <button
-                        className="user-menu-item"
-                        onClick={() => {
-                          setUserMenuOpen(false);
-                          setSettingsOpen(true);
-                        }}
-                      >
-                        <SettingsIcon width="16" height="16" />
-                        <span>设置</span>
-                      </button>
-                    </>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          <UserMenu
+            user={user}
+            userAvatar={userAvatar}
+            isMobile={isMobile}
+            navbarHeight={navbarHeight}
+            lastSyncTime={lastSyncTime}
+            isSyncing={isSyncing}
+            onSync={() => user?.id && syncUserConfig(user.id)}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onOpenPortfolioEarnings={() => setPortfolioEarningsOpen(true)}
+            onOpenLogin={handleOpenLogin}
+            onLogout={handleLogout}
+            onLogoutConfirmOpenChange={setIsLogoutConfirmOpen}
+          />
         </div>
       </div>
       {shouldShowMarketIndex && (
@@ -7881,22 +7792,6 @@ export default function HomePage() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {logoutConfirmOpen && (
-          <ConfirmModal
-            title="确认登出"
-            message="确定要退出当前账号吗？"
-            icon={<LogoutIcon width="20" height="20" className="shrink-0 text-[var(--danger)]" />}
-            confirmText="确认登出"
-            onConfirm={() => {
-              setLogoutConfirmOpen(false);
-              handleLogout();
-            }}
-            onCancel={() => setLogoutConfirmOpen(false)}
-          />
-        )}
-      </AnimatePresence>
-
         <div className="footer">
           {!isMobile && (
             <>
@@ -8183,6 +8078,8 @@ export default function HomePage() {
                 feeMode: 'none',
                 feeValue: 0,
                 date: payload.date,
+                navOffsetDays: -1,
+                netValueSearch: 'backward',
                 isAfter3pm: false,
                 isDca: false,
                 timestamp: nowTs,
@@ -8200,6 +8097,8 @@ export default function HomePage() {
                 feeMode: 'none',
                 feeValue: 0,
                 date: payload.date,
+                navOffsetDays: -1,
+                netValueSearch: 'backward',
                 isAfter3pm: false,
                 isDca: false,
                 timestamp: nowTs + 1,
@@ -8495,18 +8394,6 @@ export default function HomePage() {
             showMarketIndexMobile={showMarketIndexMobile}
             showGroupFundSearchPc={showGroupFundSearchPc}
             showGroupFundSearchMobile={showGroupFundSearchMobile}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* 更新提示弹窗 */}
-      <AnimatePresence>
-        {updateModalOpen && (
-          <UpdatePromptModal
-            open={updateModalOpen}
-            updateContent={updateContent}
-            onClose={() => setUpdateModalOpen(false)}
-            onRefresh={() => window.location.reload()}
           />
         )}
       </AnimatePresence>
