@@ -36,6 +36,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { DragIcon, SettingsIcon, StarIcon, TrashIcon, ResetIcon, FolderPlusIcon, LinkIcon } from './Icons';
+import { ConsecutiveTrendBadge } from './Common';
 import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
 import { storageStore } from '../stores';
 import { asyncPool } from '@/app/lib/asyncHelper';
@@ -211,9 +212,11 @@ export default function PcFundTable({
   blockDialogClose = false,
   stickyTop = 0,
   masked = false,
-  relatedSectorSessionKey = '',
+  relatedSectorSessionKey,
   onFundTagsClick,
-}) {
+  fundExtraDataByCode = {},
+  }) {
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -410,13 +413,17 @@ export default function PcFundTable({
     const visibility = group.pcTableColumnVisibility && typeof group.pcTableColumnVisibility === 'object'
       ? group.pcTableColumnVisibility
       : null;
-    return { sizing: sizingObj, order, visibility };
+    const pinned = Array.isArray(group.pcTableColumnPinned)
+      ? group.pcTableColumnPinned
+      : [];
+    return { sizing: sizingObj, order, visibility, pinned };
   };
 
   const getDefaultPcGroupConfig = () => ({
     order: [...NON_FROZEN_COLUMN_IDS],
     visibility: null,
     sizing: {},
+    pinned: [],
   });
 
   const getInitialConfigByGroup = () => {
@@ -436,6 +443,7 @@ export default function PcFundTable({
           pcTableColumnVisibility: pc.visibility,
           pcTableColumns: Object.keys(pc.sizing).length ? pc.sizing : null,
           pcShowFullFundName: group.pcShowFullFundName === true,
+          pcTableColumnPinned: pc.pinned,
         };
       }
     });
@@ -490,6 +498,7 @@ export default function PcFundTable({
       if (updates.pcTableColumnOrder !== undefined) group.pcTableColumnOrder = updates.pcTableColumnOrder;
       if (updates.pcTableColumnVisibility !== undefined) group.pcTableColumnVisibility = updates.pcTableColumnVisibility;
       if (updates.pcTableColumns !== undefined) group.pcTableColumns = updates.pcTableColumns;
+      if (updates.pcTableColumnPinned !== undefined) group.pcTableColumnPinned = updates.pcTableColumnPinned;
       if (updates.pcShowFullFundName !== undefined) group.pcShowFullFundName = updates.pcShowFullFundName;
       parsed[groupKey] = group;
       storageStore.setItem('customSettings', JSON.stringify(parsed));
@@ -510,6 +519,7 @@ export default function PcFundTable({
         pcTableColumnOrder: [...columnOrder],
         pcTableColumnVisibility: { ...columnVisibility },
         pcTableColumns: { ...columnSizing },
+        pcTableColumnPinned: [...(currentGroupPc?.pcTableColumnPinned || [])],
         pcShowFullFundName: !!showFullFundName,
       };
       const targetUpdates = {};
@@ -576,6 +586,30 @@ export default function PcFundTable({
   const handleToggleColumnVisibility = (columnId, visible) => {
     setColumnVisibility((prev = {}) => ({ ...prev, [columnId]: visible }));
   };
+
+  const handleTogglePinColumn = (id) => {
+    const currentPinned = currentGroupPc?.pcTableColumnPinned || [];
+    let nextPinned;
+    let nextOrder;
+    
+    if (currentPinned.includes(id)) {
+      nextPinned = currentPinned.filter(c => c !== id);
+      const pinnedPart = columnOrder.filter(c => nextPinned.includes(c));
+      const unpinnedPart = columnOrder.filter(c => !nextPinned.includes(c));
+      nextOrder = [...pinnedPart, ...unpinnedPart];
+    } else {
+      nextPinned = [...currentPinned, id];
+      const existingPinned = columnOrder.filter(c => currentPinned.includes(c));
+      const existingUnpinnedWithoutId = columnOrder.filter(c => !currentPinned.includes(c) && c !== id);
+      nextOrder = [...existingPinned, id, ...existingUnpinnedWithoutId];
+    }
+    
+    persistPcGroupConfig({
+      pcTableColumnPinned: nextPinned,
+      pcTableColumnOrder: nextOrder,
+    });
+  };
+
   const onRemoveFundRef = useRef(onRemoveFund);
   const onToggleFavoriteRef = useRef(onToggleFavorite);
   const onHoldingAmountClickRef = useRef(onHoldingAmountClick);
@@ -985,6 +1019,7 @@ export default function PcFundTable({
                 <LinkIcon width="14" height="14" />
               </span>
             ) : null}
+            <ConsecutiveTrendBadge trend={fundExtraDataByCode?.[code]?.consecutiveTrend} />
             {info.getValue() ?? '—'}
           </span>
           {code ? <span className="muted code-text">
@@ -1029,7 +1064,7 @@ export default function PcFundTable({
           );
         },
         size: 300,
-        minSize: 140,
+        minSize: 280,
         enablePinning: true,
         cell: (info) => (
           <FundNameCell
@@ -1812,6 +1847,13 @@ export default function PcFundTable({
       columnSizing,
       columnOrder,
       columnVisibility,
+      columnPinning: {
+        left: [
+          'fundName',
+          ...columnOrder.filter(id => (currentGroupPc?.pcTableColumnPinned || []).includes(id))
+        ],
+        right: ['actions'],
+      },
     },
     onColumnOrderChange: (updater) => {
       setColumnOrder(updater);
@@ -1874,7 +1916,12 @@ export default function PcFundTable({
     const style = {
       width: `${column.getSize()}px`,
     };
-    if (!isPinned) return style;
+    if (!isPinned) {
+      return {
+        ...style,
+        zIndex: isHeader ? 1 : 0,
+      };
+    }
 
     const isLeft = isPinned === 'left';
     const isRight = isPinned === 'right';
@@ -1892,6 +1939,37 @@ export default function PcFundTable({
     };
   };
 
+  const getSortHeaderMeta = useCallback((columnId) => {
+    const sortMap = {
+      fundName: 'name',
+      tags: 'tags',
+      yesterdayChangePercent: 'yesterdayIncrease',
+      estimateChangePercent: 'yield',
+      totalChangePercent: 'estimateProfit',
+      holdingAmount: 'holdingAmount',
+      todayProfit: 'todayProfit',
+      yesterdayProfit: 'yesterdayProfit',
+      holdingProfit: 'holding',
+      holdingDays: 'holdingDays',
+      holdingCost: 'holdingCost',
+      period1w: 'last1Week',
+      period1m: 'last1Month',
+      period3m: 'last3Months',
+      period6m: 'last6Months',
+      period1y: 'last1Year',
+    };
+    const sortKey = sortMap[columnId];
+    const isSorted = !!sortBy && sortKey === sortBy;
+    let isSortEnabled = !!sortKey && (sortRules || []).some((rule) => rule?.id === sortKey && !!rule?.enabled);
+
+    // 选择默认排序时，隐藏基金名称表头的排序和箭头
+    if (sortBy === 'default' && sortKey === 'name') {
+      isSortEnabled = false;
+    }
+
+    return { sortKey, isSorted, isSortEnabled };
+  }, [sortBy, sortRules]);
+
   const renderTableHeader = (forPortal = false) => {
     if (!headerGroup) return null;
     return (
@@ -1904,34 +1982,8 @@ export default function PcFundTable({
           const isRightAligned = NON_FROZEN_COLUMN_IDS.includes(header.column.id);
           const align = isNameColumn ? '' : isRightAligned ? 'text-right' : 'text-center';
 
-          // 匹配排序状态
           const colId = header.column.id || header.column.columnDef?.accessorKey;
-          const sortMap = {
-            'fundName': 'name',
-            'tags': 'tags',
-            'yesterdayChangePercent': 'yesterdayIncrease',
-            'estimateChangePercent': 'yield',
-            'totalChangePercent': 'estimateProfit',
-            'holdingAmount': 'holdingAmount',
-            'todayProfit': 'todayProfit',
-            'yesterdayProfit': 'yesterdayProfit',
-            'holdingProfit': 'holding',
-            'holdingDays': 'holdingDays',
-            'holdingCost': 'holdingCost',
-            'period1w': 'last1Week',
-            'period1m': 'last1Month',
-            'period3m': 'last3Months',
-            'period6m': 'last6Months',
-            'period1y': 'last1Year'
-          };
-          const sortKey = sortMap[colId];
-          const isSorted = sortBy && sortKey === sortBy;
-          let isSortEnabled = sortKey && sortRules.find(r => r.id === sortKey)?.enabled;
-          
-          // 选择默认排序的时候，隐藏基金名称表头的排序和箭头
-          if (sortBy === 'default' && sortKey === 'name') {
-            isSortEnabled = false;
-          }
+          const { sortKey, isSorted, isSortEnabled } = getSortHeaderMeta(colId);
 
           return (
             <div
@@ -1948,12 +2000,14 @@ export default function PcFundTable({
                 }
               }}
             >
-              <div style={{
-                paddingRight: isRightAligned ? '20px' : '0',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4
-              }}>
+              <div
+                style={{
+                  paddingRight: isRightAligned ? '20px' : '0',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
                 {header.isPlaceholder
                   ? null
                   : flexRender(
@@ -2033,6 +2087,7 @@ export default function PcFundTable({
         .table-header-row-scroll,
         .table-row-scroll {
           display: flex !important;
+          align-items: stretch !important; /* 让每个单元格撑满行高 */
           width: fit-content !important;
           min-width: 100%;
           gap: 0 !important; /* Reset gap because we control width explicitly */
@@ -2040,6 +2095,8 @@ export default function PcFundTable({
 
         .table-header-cell,
         .table-cell {
+          display: flex !important;
+          align-items: center; /* 保持单元格内容垂直居中 */
           flex-shrink: 0;
           box-sizing: border-box;
           padding-left: 8px;
@@ -2105,68 +2162,90 @@ export default function PcFundTable({
 
         {/* 表体 */}
         {enableVirtualization ? (
-          <div
-            ref={virtualScrollAnchorRef}
-            className="pc-fund-table-body-virtual"
-            style={{ position: 'relative', width: '100%' }}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+            modifiers={[restrictToVerticalAxis, restrictToParentElement]}
           >
-            <div
-              style={{
-                height: rowVirtualizer.getTotalSize(),
-                position: 'relative',
-                width: '100%',
-              }}
+            <SortableContext
+              items={data.map((item) => item.code)}
+              strategy={verticalListSortingStrategy}
             >
-            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const row = tableRows[virtualRow.index];
-              if (!row) return null;
-              return (
+              <div
+                ref={virtualScrollAnchorRef}
+                className="pc-fund-table-body-virtual"
+                style={{ position: 'relative', width: '100%' }}
+              >
                 <div
-                  key={row.original.code || row.id}
-                  data-index={virtualRow.index}
-                  ref={rowVirtualizer.measureElement}
                   style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
+                    height: rowVirtualizer.getTotalSize(),
+                    position: 'relative',
                     width: '100%',
-                    transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
                   }}
                 >
-                  <div
-                    className={`table-row table-row-scroll ${virtualRow.index % 2 === 1 ? 'row-even' : ''}`}
-                  >
-                    {row.getVisibleCells().map((cell) => {
-                      const columnId = cell.column.id || cell.column.columnDef?.accessorKey;
-                      const isNameColumn = columnId === 'fundName';
-                      const align = isNameColumn
-                        ? ''
-                        : NON_FROZEN_COLUMN_IDS.includes(columnId)
-                          ? 'text-right'
-                          : 'text-center';
-                      const cellClassName =
-                        (cell.column.columnDef.meta && cell.column.columnDef.meta.cellClassName) || '';
-                      const style = getCommonPinningStyles(cell.column, false);
-                      const isPinned = cell.column.getIsPinned();
-                      return (
+                {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const row = tableRows[virtualRow.index];
+                  if (!row) return null;
+                  return (
+                    <div
+                      key={row.original.code || row.id}
+                      data-index={virtualRow.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
+                        zIndex: activeId === row.original.code ? 9999 : 1,
+                      }}
+                    >
+                      <SortableRow
+                        row={row}
+                        isTableDragging={!!activeId}
+                        disabled={sortBy !== 'default'}
+                        enableAnimation={false}
+                      >
                         <div
-                          key={cell.id}
-                          className={`table-cell ${align} ${cellClassName} ${isPinned ? 'pinned-cell' : ''}`}
-                          style={style}
+                          className={`table-row table-row-scroll ${virtualRow.index % 2 === 1 ? 'row-even' : ''}`}
                         >
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext(),
-                          )}
+                          {row.getVisibleCells().map((cell) => {
+                            const columnId = cell.column.id || cell.column.columnDef?.accessorKey;
+                            const isNameColumn = columnId === 'fundName';
+                            const align = isNameColumn
+                              ? ''
+                              : NON_FROZEN_COLUMN_IDS.includes(columnId)
+                                ? 'text-right'
+                                : 'text-center';
+                            const cellClassName =
+                              (cell.column.columnDef.meta && cell.column.columnDef.meta.cellClassName) || '';
+                            const style = getCommonPinningStyles(cell.column, false);
+                            const isPinned = cell.column.getIsPinned();
+                            return (
+                              <div
+                                key={cell.id}
+                                className={`table-cell ${align} ${cellClassName} ${isPinned ? 'pinned-cell' : ''}`}
+                                style={style}
+                              >
+                                {flexRender(
+                                  cell.column.columnDef.cell,
+                                  cell.getContext(),
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })}
-                  </div>
+                      </SortableRow>
+                    </div>
+                  );
+                })}
                 </div>
-              );
-            })}
-            </div>
-          </div>
+              </div>
+            </SortableContext>
+          </DndContext>
         ) : (
           <DndContext
             sensors={sensors}
@@ -2312,19 +2391,51 @@ export default function PcFundTable({
                   header.column.columnDef?.accessorKey === 'fundName';
                 const isRightAligned = NON_FROZEN_COLUMN_IDS.includes(header.column.id);
                 const align = isNameColumn ? '' : isRightAligned ? 'text-right' : 'text-center';
+                const colId = header.column.id || header.column.columnDef?.accessorKey;
+                const { sortKey, isSorted, isSortEnabled } = getSortHeaderMeta(colId);
                 return (
                   <div
                     key={header.id}
-                    className={`table-header-cell ${align}`}
-                    style={style}
+                    className={`table-header-cell ${align} ${isSortEnabled ? 'sortable' : ''}`}
+                    style={{
+                      ...style,
+                      cursor: isSortEnabled ? 'pointer' : 'default',
+                      userSelect: isSortEnabled ? 'none' : 'auto',
+                    }}
+                    onClick={() => {
+                      if (isSortEnabled && onSortChange) {
+                        onSortChange(sortKey);
+                      }
+                    }}
                   >
-                    <div style={{ paddingRight: isRightAligned ? '20px' : '0' }}>
+                    <div
+                      style={{
+                        paddingRight: isRightAligned ? '20px' : '0',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
                       {header.isPlaceholder
                         ? null
                         : flexRender(
                           header.column.columnDef.header,
                           header.getContext(),
                         )}
+                      {isSortEnabled && (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            flexDirection: 'column',
+                            lineHeight: 1,
+                            fontSize: '8px',
+                            opacity: isSorted ? 1 : 0.3,
+                          }}
+                        >
+                          <span style={{ opacity: isSorted && sortOrder === 'asc' ? 1 : 0.3 }}>▲</span>
+                          <span style={{ opacity: isSorted && sortOrder === 'desc' ? 1 : 0.3 }}>▼</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -2350,7 +2461,9 @@ export default function PcFundTable({
           setColumnOrder(newOrder);
         }}
         columnVisibility={columnVisibility}
+        pinnedColumns={currentGroupPc?.pcTableColumnPinned || []}
         onToggleColumnVisibility={handleToggleColumnVisibility}
+        onTogglePinColumn={handleTogglePinColumn}
         onResetColumnOrder={handleResetColumnOrder}
         onResetColumnVisibility={handleResetColumnVisibility}
         onResetSizing={() => setResetConfirmOpen(true)}
