@@ -1,7 +1,7 @@
 {
-  "name": "基估宝",
-  "short_name": "基估宝",
-  "description": "基金管理管家",
+  "name": "叽咕-基金估值",
+  "short_name": "叽咕",
+  "description": "基金估值助手",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
