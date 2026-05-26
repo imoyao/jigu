@@ -18,8 +18,8 @@ export default function AddFundToGroupModal({ allFunds, currentGroupCodes, holdi
 
   const availableFunds = useMemo(() => {
     const base = (allFunds || []).filter(f => !(currentGroupCodes || []).includes(f.code));
-    if (!searchQuery.trim()) return base;
-    const query = searchQuery.trim().toLowerCase();
+    const query = String(searchQuery ?? '').trim().toLowerCase();
+    if (!query) return base;
     return base.filter(f =>
       (f.name && f.name.toLowerCase().includes(query)) ||
       (f.code && f.code.includes(query))
@@ -38,7 +38,7 @@ export default function AddFundToGroupModal({ allFunds, currentGroupCodes, holdi
   const getHoldingAmount = (fund) => {
     const holding = holdings[fund?.code];
     if (!holding || !holding.share || holding.share <= 0) return null;
-    const nav = Number(fund?.dwjz) || Number(fund?.gsz) || Number(fund?.estGsz) || 0;
+    const nav = Number(fund?.dwjz) || Number(fund?.gsz) || 0;
     if (!nav) return null;
     return holding.share * nav;
   };
@@ -120,13 +120,11 @@ export default function AddFundToGroupModal({ allFunds, currentGroupCodes, holdi
         </div>
 
         <div
-          className="group-manage-list-container"
+          className="group-manage-list-container scrollbar-y-styled"
           style={{
             maxHeight: '50vh',
             overflowY: 'auto',
             paddingRight: '4px',
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'var(--border) transparent',
           }}
         >
           {availableFunds.length === 0 ? (

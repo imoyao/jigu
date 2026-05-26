@@ -23,11 +23,11 @@ export default function SelectFundSingleModal({
   const availableFunds = useMemo(() => {
     const excluded = new Set((excludeCodes || []).filter(Boolean));
     const base = (allFunds || []).filter((f) => f?.code && !excluded.has(f.code));
-    if (!searchQuery.trim()) return base;
-    const query = searchQuery.trim().toLowerCase();
+    const query = String(searchQuery ?? '').trim().toLowerCase();
+    if (!query) return base;
     return base.filter((f) =>
       (f.name && f.name.toLowerCase().includes(query)) ||
-      (f.code && String(f.code).includes(query))
+      (f.code && f.code.includes(query))
     );
   }, [allFunds, excludeCodes, searchQuery]);
 
@@ -84,13 +84,11 @@ export default function SelectFundSingleModal({
         </div>
 
         <div
-          className="group-manage-list-container"
+          className="group-manage-list-container scrollbar-y-styled"
           style={{
             maxHeight: '50vh',
             overflowY: 'auto',
             paddingRight: '4px',
-            scrollbarWidth: 'thin',
-            scrollbarColor: 'var(--border) transparent',
           }}
         >
           {availableFunds.length === 0 ? (

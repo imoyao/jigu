@@ -1356,30 +1356,46 @@ input[type="number"] {
   background: var(--primary);
 }
 
-/* 纵向滚动条通用样式（与项目整体规范一致，供弹窗、列表等使用） */
+/* PC 表头固定时的 portal 容器：与 table-scroll-area 横向滚动同步，但隐藏自身滚动条 */
+.pc-fund-table-portal-header {
+  scrollbar-width: none;         /* Firefox */
+  -ms-overflow-style: none;      /* IE / Edge legacy */
+}
+
+.pc-fund-table-portal-header::-webkit-scrollbar {
+  display: none;                 /* Chrome / Safari */
+}
+
+/* 纵向滚动条通用样式（与项目整体规范一致，供根页面、弹窗、列表等使用） */
+html,
 .scrollbar-y-styled {
   scrollbar-width: thin;
   scrollbar-color: var(--border) var(--bg);
 }
 
+html::-webkit-scrollbar,
 .scrollbar-y-styled::-webkit-scrollbar {
   width: 8px;
 }
 
+html::-webkit-scrollbar-track,
 .scrollbar-y-styled::-webkit-scrollbar-track {
   background: var(--bg);
   border-radius: 8px;
 }
 
+html::-webkit-scrollbar-thumb,
 .scrollbar-y-styled::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 8px;
 }
 
+html::-webkit-scrollbar-thumb:hover,
 .scrollbar-y-styled::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
 
+html::-webkit-scrollbar-thumb:active,
 .scrollbar-y-styled::-webkit-scrollbar-thumb:active {
   background: var(--primary);
 }
@@ -2542,7 +2558,7 @@ input[type="number"] {
   justify-content: center;
   align-items: flex-end;
   pointer-events: none;
-  padding: 0 20px calc(20px + env(safe-area-inset-bottom, 0px));
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px));
   box-sizing: border-box;
   /* 提升合成层，减少 iOS/WebKit 下 fixed 随滚动错位 */
   transform: translateZ(0);
@@ -2556,7 +2572,7 @@ input[type="number"] {
   width: fit-content;
   max-width: min(400px, calc(100vw - 40px));
   margin-inline: auto;
-  border-radius: 32px;
+  border-radius: 28px;
   padding: 2px;
   box-sizing: border-box;
   /* 背景色参考 Drawer（drawer-content-theme）：更通透的毛玻璃效果 */
@@ -2594,11 +2610,11 @@ input[type="number"] {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 54px;
+  min-height: 48px;
   min-width: 44px;
-  padding: 5px 32px 4px;
+  padding: 4px 28px 3px;
   border: none;
-  border-radius: 27px;
+  border-radius: 24px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -2618,7 +2634,7 @@ input[type="number"] {
 .mobile-bottom-nav-pill {
   position: absolute;
   inset: 2px;
-  border-radius: 27px;
+  border-radius: 24px;
   background: rgba(255, 255, 255, 0.14);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   z-index: 0;
@@ -2641,7 +2657,7 @@ input[type="number"] {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 2px;
 }
 
 .mobile-bottom-nav-icon-wrap {
@@ -2652,8 +2668,8 @@ input[type="number"] {
 }
 
 .mobile-bottom-nav-icon {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
 }
 
 .mobile-bottom-nav-label {
@@ -2668,6 +2684,28 @@ input[type="number"] {
   .mobile-bottom-nav-tab:active .mobile-bottom-nav-icon-wrap {
     opacity: 1;
   }
+}
+
+/* 减少动态样式效果平替方案 */
+.reduce-dynamic-style * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  transition: none !important;
+}
+
+.reduce-dynamic-style .glass,
+.reduce-dynamic-style .group-summary-sticky,
+.reduce-dynamic-style .filter-bar,
+.reduce-dynamic-style .mobile-bottom-nav,
+.reduce-dynamic-style .drawer-content-theme,
+.reduce-dynamic-style [data-slot="dialog-content"],
+.reduce-dynamic-style .card {
+  background-color: color-mix(in srgb, var(--card) 96%, transparent) !important;
+}
+
+.reduce-dynamic-style body::before {
+  display: none !important;
 }
 
 .mine-tab {
@@ -4333,4 +4371,9 @@ input[type="number"] {
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* react-photo-view portal pointer events fix for Radix UI */
+.PhotoView-Portal {
+  pointer-events: auto !important;
 }

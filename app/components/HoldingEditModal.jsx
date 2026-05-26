@@ -19,11 +19,11 @@ const TZ = typeof Intl !== 'undefined' && Intl.DateTimeFormat
   ? (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai')
   : 'Asia/Shanghai';
 
-export default function HoldingEditModal({ fund, holding, onClose, onSave, onOpenTrade }) {
+export default function HoldingEditModal({ fund, holding, nav, onClose, onSave, onOpenTrade }) {
   const [mode, setMode] = useState('amount'); // 'amount' | 'share'
   const [dateMode, setDateMode] = useState('date'); // 'date' | 'days'
 
-  const dwjz = fund?.dwjz || fund?.gsz || 0;
+  const dwjz = nav ?? (fund?.dwjz || fund?.gsz || 0);
   const dwjzRef = useRef(dwjz);
   useEffect(() => {
     dwjzRef.current = dwjz;
@@ -79,8 +79,8 @@ export default function HoldingEditModal({ fund, holding, onClose, onSave, onOpe
         const principal = a - p;
         const c = s > 0 ? principal / s : 0;
 
-        setShare(s.toFixed(2));
-        setCost(c.toFixed(4));
+        setShare(Number(s.toFixed(6)).toString());
+        setCost(Number(c.toFixed(6)).toString());
       }
     } else {
       if (share && dwjz > 0) {
@@ -145,7 +145,7 @@ export default function HoldingEditModal({ fund, holding, onClose, onSave, onOpe
       const a = Number(amount);
       const p = Number(profit || 0);
       const rawShare = a / dwjz;
-      finalShare = Number(rawShare.toFixed(2));
+      finalShare = Number(rawShare.toFixed(6));
       const principal = a - p;
       finalCost = finalShare > 0 ? principal / finalShare : 0;
     }

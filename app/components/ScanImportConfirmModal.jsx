@@ -22,9 +22,10 @@ export default function ScanImportConfirmModal({
   groups = [],
   existingAllCodes = [],
   existingFavCodes = [],
-  isOcrScan = false
+  isOcrScan = false,
+  currentGroup = 'all'
 }) {
-  const [selectedGroupId, setSelectedGroupId] = useState('all');
+  const [selectedGroupId, setSelectedGroupId] = useState(currentGroup);
   const [expandAfterAdd, setExpandAfterAdd] = useState(true);
   const allCodeSet = useMemo(() => new Set((existingAllCodes || []).filter(Boolean)), [existingAllCodes]);
   const favCodeSet = useMemo(() => new Set((existingFavCodes || []).filter(Boolean)), [existingFavCodes]);
@@ -76,7 +77,7 @@ export default function ScanImportConfirmModal({
           </div>
         ) : (
           <>
-            <div className="search-results pending-list" style={{ maxHeight: 360, overflowY: 'auto' }}>
+            <div className="search-results pending-list scrollbar-y-styled" style={{ maxHeight: 360, overflowY: 'auto' }}>
               {scannedFunds.map((item) => {
                 const isSelected = selectedScannedCodes.has(item.code);
                 const isInvalid = item.status === 'invalid';

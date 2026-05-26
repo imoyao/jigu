@@ -4,7 +4,7 @@ import { toast as sonnerToast } from 'sonner';
 import { parseFundTextWithLLM, fetchFundData, searchFunds } from '../api/fund';
 import { recordValuation } from '../lib/valuationTimeseries';
 import { useFundFuzzyMatcher } from './useFundFuzzyMatcher';
-import { useStorageStore, useUserStore } from '../stores';
+import { useStorageStore, useUserStore, useModalStore } from '../stores';
 
 /**
  * OCR 扫描导入基金的完整流程
@@ -12,7 +12,6 @@ import { useStorageStore, useUserStore } from '../stores';
  * @param {{
  *   setCurrentTab: Function,
  *   setValuationSeries: Function,
- *   setSuccessModal: Function,
  *   showToast: Function,
  *   normalizeCode: Function,
  *   dedupeByCode: Function,
@@ -21,16 +20,16 @@ import { useStorageStore, useUserStore } from '../stores';
 export function useScanImport({
   setCurrentTab,
   setValuationSeries,
-  setSuccessModal,
   showToast,
   normalizeCode,
   dedupeByCode,
 }) {
+  const setSuccessModal = (state) => useModalStore.setState({ successModal: state });
   const user = useUserStore((s) => s.user);
   const funds = useStorageStore((s) => s.funds);
   const favorites = useStorageStore((s) => s.favorites);
   const groups = useStorageStore((s) => s.groups);
-  
+
   const setFunds = useStorageStore((s) => s.setFunds);
   const setHoldings = useStorageStore((s) => s.setHoldings);
   const setFavorites = useStorageStore((s) => s.setFavorites);
@@ -39,12 +38,16 @@ export function useScanImport({
   const setCollapsedCodes = useStorageStore((s) => s.setCollapsedCodes);
   const setCollapsedTrends = useStorageStore((s) => s.setCollapsedTrends);
 
-  const [scanModalOpen, setScanModalOpen] = useState(false);
-  const [scanConfirmModalOpen, setScanConfirmModalOpen] = useState(false);
+  const scanModalOpen = useModalStore((s) => s.scanModalOpen);
+  const scanConfirmModalOpen = useModalStore((s) => s.scanConfirmModalOpen);
+  const isScanning = useModalStore((s) => s.isScanning);
+  const isScanImporting = useModalStore((s) => s.isScanImporting);
+  const setScanModalOpen = (v) => useModalStore.setState({ scanModalOpen: typeof v === 'function' ? v(useModalStore.getState().scanModalOpen) : v });
+  const setScanConfirmModalOpen = (v) => useModalStore.setState({ scanConfirmModalOpen: typeof v === 'function' ? v(useModalStore.getState().scanConfirmModalOpen) : v });
+  const setIsScanning = (v) => useModalStore.setState({ isScanning: typeof v === 'function' ? v(useModalStore.getState().isScanning) : v });
+  const setIsScanImporting = (v) => useModalStore.setState({ isScanImporting: typeof v === 'function' ? v(useModalStore.getState().isScanImporting) : v });
   const [scannedFunds, setScannedFunds] = useState([]);
   const [selectedScannedCodes, setSelectedScannedCodes] = useState(new Set());
-  const [isScanning, setIsScanning] = useState(false);
-  const [isScanImporting, setIsScanImporting] = useState(false);
   const [scanImportProgress, setScanImportProgress] = useState({ current: 0, total: 0, success: 0, failed: 0 });
   const [scanProgress, setScanProgress] = useState({ stage: 'ocr', current: 0, total: 0 });
   const [isOcrScan, setIsOcrScan] = useState(false);
@@ -74,9 +77,7 @@ export function useScanImport({
     setIsScanning(false);
     setScanProgress({ stage: 'ocr', current: 0, total: 0 });
     if (ocrWorkerRef.current) {
-      try {
-        ocrWorkerRef.current.terminate();
-      } catch (e) {}
+      import('../lib/ocr').then(({ terminateOcrWorker }) => terminateOcrWorker());
       ocrWorkerRef.current = null;
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -93,32 +94,8 @@ export function useScanImport({
     try {
       let worker = ocrWorkerRef.current;
       if (!worker) {
-        const cdnBases = [
-          'https://01kjzb6fhx9f8rjstc8c21qadx.esa.staticdn.net/npm',
-          'https://fastly.jsdelivr.net/npm',
-          'https://cdn.jsdelivr.net/npm',
-        ];
-        const coreCandidates = [
-          'tesseract-core-simd-lstm.wasm.js',
-          'tesseract-core-lstm.wasm.js',
-        ];
-        let lastErr = null;
-        for (const base of cdnBases) {
-          for (const coreFile of coreCandidates) {
-            try {
-              worker = await createWorker('chi_sim+eng', 1, {
-                workerPath: `${base}/tesseract.js@v5.1.1/dist/worker.min.js`,
-                corePath: `${base}/tesseract.js-core@v5.1.1/${coreFile}`,
-              });
-              lastErr = null;
-              break;
-            } catch (e) {
-              lastErr = e;
-            }
-          }
-          if (!lastErr) break;
-        }
-        if (lastErr) throw lastErr;
+        const { getOcrWorker } = await import('../lib/ocr');
+        worker = await getOcrWorker('chi_sim+eng');
         ocrWorkerRef.current = worker;
       }
 
@@ -164,7 +141,8 @@ export function useScanImport({
         } catch (e) {
           if (String(e?.message || '').includes('OCR_TIMEOUT')) {
             if (worker) {
-              try { await worker.terminate(); } catch (err) {}
+              const { terminateOcrWorker } = await import('../lib/ocr');
+              await terminateOcrWorker();
               ocrWorkerRef.current = null;
             }
             throw e;
@@ -369,17 +347,6 @@ export function useScanImport({
       if (newFunds.length > 0) {
         setFunds(prev => dedupeByCode([...newFunds, ...prev]));
 
-        if (Object.keys(newHoldings).length > 0) {
-          if (targetGroupId !== 'all' && targetGroupId !== 'fav') {
-            setGroupHoldings(prev => {
-              const bucket = prev[targetGroupId] ? { ...prev[targetGroupId] } : {};
-              return { ...prev, [targetGroupId]: { ...bucket, ...newHoldings } };
-            });
-          } else {
-            setHoldings(prev => ({ ...prev, ...newHoldings }));
-          }
-        }
-
         const nextSeries = {};
         newFunds.forEach(u => {
           if (u?.code != null && !u.noValuation && Number.isFinite(Number(u.gsz))) {
@@ -387,19 +354,30 @@ export function useScanImport({
           }
         });
         if (Object.keys(nextSeries).length > 0) setValuationSeries(prev => ({ ...prev, ...nextSeries }));
+      }
 
-        if (!expandAfterAdd) {
-          setCollapsedCodes(prev => {
-            const next = new Set(prev);
-            newCodesSet.forEach((code) => next.add(code));
-            return next;
+      if (Object.keys(newHoldings).length > 0) {
+        if (targetGroupId !== 'all' && targetGroupId !== 'fav') {
+          setGroupHoldings(prev => {
+            const bucket = prev[targetGroupId] ? { ...prev[targetGroupId] } : {};
+            return { ...prev, [targetGroupId]: { ...bucket, ...newHoldings } };
           });
-          setCollapsedTrends(prev => {
-            const next = new Set(prev);
-            newCodesSet.forEach((code) => next.add(code));
-            return next;
-          });
+        } else {
+          setHoldings(prev => ({ ...prev, ...newHoldings }));
         }
+      }
+
+      if (!expandAfterAdd) {
+        setCollapsedCodes(prev => {
+          const next = new Set(prev);
+          codes.forEach((code) => next.add(code));
+          return next;
+        });
+        setCollapsedTrends(prev => {
+          const next = new Set(prev);
+          codes.forEach((code) => next.add(code));
+          return next;
+        });
       }
 
       if (targetGroupId === 'fav') {

@@ -1,9 +1,10 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useWindowVirtualizer } from '@tanstack/react-virtual';
+
 import ReactDOM from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
+import { useModalStore } from '../stores';
 import {
   flexRender,
   getCoreRowModel,
@@ -32,7 +33,7 @@ import MoveGroupModal from './MoveGroupModal';
 import SuccessModal from './SuccessModal';
 import { ArrowUpToLineIcon, CloseIcon, DragIcon, FolderPlusIcon, LinkIcon, PencilIcon, SettingsIcon, StarIcon, TrashIcon } from './Icons';
 import { ConsecutiveTrendBadge } from './Common';
-import { fetchFundPeriodReturns, fetchRelatedSectors, fetchRelatedSectorLiveQuote } from '@/app/api/fund';
+import { fetchFundPeriodReturns, fetchRelatedSectorsBatch, fetchFundSecidsBatch, fetchEastmoneySectorQuotesBatch } from '@/app/api/fund';
 import { storageStore } from '../stores';
 import { asyncPool } from '@/app/lib/asyncHelper';
 import { Badge } from '@/components/ui/badge';
@@ -61,12 +62,13 @@ const MOBILE_NON_FROZEN_COLUMN_IDS = [
   'period3m',
   'period6m',
   'period1y',
+  'holdingRatio',
   'holdingCost',
   'costNav',
   'estimateNav',
 ];
 
-const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set(['tags', 'holdingCost', 'costNav', 'sinceAddedChangePercent']);
+const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set(['tags', 'holdingCost', 'costNav', 'sinceAddedChangePercent', 'holdingRatio']);
 
 const MOBILE_COLUMN_HEADERS = {
   relatedSector: '关联板块',
@@ -82,6 +84,7 @@ const MOBILE_COLUMN_HEADERS = {
   sinceAddedChangePercent: '自添加来',
   totalChangePercent: '估算收益',
   holdingCost: '持仓成本',
+  holdingRatio: '持仓占比',
   costNav: '成本净值',
   holdingDays: '持有天数',
   todayProfit: '当日收益',
@@ -90,7 +93,37 @@ const MOBILE_COLUMN_HEADERS = {
   tags: '基金标签',
 };
 
-const RowSortableContext = createContext(null);
+const RowSortableContext = createContext({
+  setActivatorNodeRef: null,
+  listeners: null,
+  activatorProps: null,
+});
+
+function sortableRowA11yProps(attributes) {
+  if (!attributes) return {};
+  const { tabIndex: _ignored, ...rest } = attributes;
+  return { ...rest, tabIndex: -1 };
+}
+
+function beginDragScrollLock(scrollYRef, rafRef) {
+  scrollYRef.current = window.scrollY;
+  const tick = () => {
+    if (window.scrollY !== scrollYRef.current) {
+      window.scrollTo(0, scrollYRef.current);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+  };
+  if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  rafRef.current = requestAnimationFrame(tick);
+}
+
+function endDragScrollLock(scrollYRef, rafRef) {
+  if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  rafRef.current = null;
+  if (window.scrollY !== scrollYRef.current) {
+    window.scrollTo(0, scrollYRef.current);
+  }
+}
 
 function EditDragHandleCell({ disabled }) {
   const rowSortable = useContext(RowSortableContext);
@@ -106,6 +139,8 @@ function EditDragHandleCell({ disabled }) {
       ref={setActivatorRef}
       className="icon-button fav-button"
       title="拖动排序"
+      role="button"
+      aria-label="拖动排序"
       style={{
         backgroundColor: 'transparent',
         touchAction: 'none',
@@ -116,6 +151,7 @@ function EditDragHandleCell({ disabled }) {
         opacity: disabled ? 0.45 : 1,
       }}
       onClick={(e) => e.stopPropagation()}
+      {...(disabled ? {} : rowSortable.activatorProps)}
       {...(disabled ? {} : rowSortable.listeners)}
     >
       <DragIcon width="18" height="18" />
@@ -269,12 +305,11 @@ function MobileEditBatchHeader({
   );
 }
 
-function SortableRow({ row, children, isTableDragging, disabled }) {
+function SortableRow({ row, children, disabled }) {
   const {
     attributes,
     listeners,
     transform,
-    transition,
     setNodeRef,
     setActivatorNodeRef,
     isDragging,
@@ -282,7 +317,6 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
 
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition,
     ...(isDragging ? { position: 'relative', zIndex: 9999, opacity: 0.8, boxShadow: '0 4px 12px rgba(0,0,0,0.15)' } : {}),
   };
 
@@ -290,15 +324,19 @@ function SortableRow({ row, children, isTableDragging, disabled }) {
     <motion.div
       ref={setNodeRef}
       className="table-row-wrapper"
-      layout={isTableDragging ? undefined : 'position'}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.2, ease: 'easeOut' }}
+      transition={{ duration: 0.15, ease: 'easeOut' }}
       style={{ ...style, position: 'relative' }}
-      {...attributes}
     >
-      <RowSortableContext.Provider value={{ setActivatorNodeRef, listeners }}>
+      <RowSortableContext.Provider
+        value={{
+          setActivatorNodeRef,
+          listeners,
+          activatorProps: sortableRowA11yProps(attributes),
+        }}
+      >
         {typeof children === 'function' ? children(setActivatorNodeRef, listeners) : children}
       </RowSortableContext.Provider>
     </motion.div>
@@ -346,7 +384,6 @@ export default function MobileFundTable({
   onCustomSettingsChange,
   stickyTop = 0,
   getFundCardProps,
-  blockDrawerClose = false,
   closeDrawerRef,
   masked = false,
   relatedSectorSessionKey = '',
@@ -357,6 +394,11 @@ export default function MobileFundTable({
   onFundTagsClick,
   fundExtraDataByCode = {},
 }) {
+  // 从 Zustand 读取删除确认弹框状态，避免 page.jsx 订阅导致全量重渲染
+  const fundDeleteConfirm = useModalStore((s) => s.fundDeleteConfirm);
+  const fundDeleteBulkConfirm = useModalStore((s) => s.fundDeleteBulkConfirm);
+  const blockDrawerClose = !!fundDeleteConfirm || !!fundDeleteBulkConfirm;
+
   const [isEditMode, setIsEditMode] = useState(false);
   const [editSelectedCodes, setEditSelectedCodes] = useState(() => new Set());
   const [moveGroupOpen, setMoveGroupOpen] = useState(false);
@@ -452,8 +494,9 @@ export default function MobileFundTable({
     useSensor(KeyboardSensor)
   );
 
-  const [activeId, setActiveId] = useState(null);
   const ignoreNextDrawerCloseRef = useRef(false);
+  const dragScrollYRef = useRef(0);
+  const dragScrollRafRef = useRef(null);
 
   const onToggleFavoriteRef = useRef(onToggleFavorite);
   const onRemoveFundRef = useRef(onRemoveFund);
@@ -479,8 +522,14 @@ export default function MobileFundTable({
     onFundTagsClick,
   ]);
 
-  const handleDragStart = (e) => setActiveId(e.active.id);
-  const handleDragCancel = () => setActiveId(null);
+  const handleDragStart = () => {
+    beginDragScrollLock(dragScrollYRef, dragScrollRafRef);
+  };
+
+  const handleDragCancel = () => {
+    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
+  };
+
   const handleDragEnd = (e) => {
     const { active, over } = e;
     if (active && over && active.id !== over.id && onReorder) {
@@ -488,8 +537,10 @@ export default function MobileFundTable({
       const newIndex = data.findIndex((item) => item.code === over.id);
       if (oldIndex !== -1 && newIndex !== -1) onReorder(oldIndex, newIndex);
     }
-    setActiveId(null);
+    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
   };
+
+  useEffect(() => () => endDragScrollLock(dragScrollYRef, dragScrollRafRef), []);
 
   const groupKey = currentTab ?? 'all';
   const currentGroupName = useMemo(() => {
@@ -709,9 +760,6 @@ export default function MobileFundTable({
 
   const tableContainerRef = useRef(null);
   const portalHeaderRef = useRef(null);
-  /** 窗口虚拟列表锚点：用于 scrollMargin（.mobile-fund-table-scroll 仅横向滚动，纵向为整页滚动） */
-  const virtualScrollAnchorRef = useRef(null);
-  const [virtualScrollMargin, setVirtualScrollMargin] = useState(0);
   const [tableContainerWidth, setTableContainerWidth] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
   const [showPortalHeader, setShowPortalHeader] = useState(false);
@@ -742,24 +790,28 @@ export default function MobileFundTable({
     if (typeof window === 'undefined') return;
     const getEffectiveStickyTop = () => {
       const stickySummaryCard = document.querySelector('.group-summary-sticky .group-summary-card');
-      if (!stickySummaryCard) return stickyTop;
+      const marketIndexEl = document.querySelector('.market-index-accordion-root');
+      const currentMarketIndexHeight = marketIndexEl ? marketIndexEl.offsetHeight : 0;
+      const baseStickyTop = stickyTop + currentMarketIndexHeight;
+
+      if (!stickySummaryCard) return baseStickyTop;
 
       const stickySummaryWrapper = stickySummaryCard.closest('.group-summary-sticky');
-      if (!stickySummaryWrapper) return stickyTop;
+      if (!stickySummaryWrapper) return baseStickyTop;
 
       const wrapperRect = stickySummaryWrapper.getBoundingClientRect();
       // 用“实际 DOM 的 top”判断 sticky 是否已生效，避免 mobile 下 stickyTop 入参与 GroupSummary 不一致导致的偏移。
       const computedTopStr = window.getComputedStyle(stickySummaryWrapper).top;
       const computedTop = Number.parseFloat(computedTopStr);
-      const baseTop = Number.isFinite(computedTop) ? computedTop : stickyTop;
+      const baseTop = Number.isFinite(computedTop) ? computedTop : baseStickyTop;
       const isSummaryStuck = wrapperRect.top <= baseTop + 1;
 
       // header 使用固定定位(top)，所以也用视口坐标系下的 wrapperRect.top + 高度，确保不重叠
-      return isSummaryStuck ? wrapperRect.top + stickySummaryWrapper.offsetHeight : stickyTop;
+      return isSummaryStuck ? wrapperRect.top + stickySummaryWrapper.offsetHeight : baseStickyTop;
     };
 
     const updateVerticalState = () => {
-      const nextStickyTop = getEffectiveStickyTop();
+      const nextStickyTop = getEffectiveStickyTop() - 2;
       setEffectiveStickyTop((prev) => (prev === nextStickyTop ? prev : nextStickyTop));
 
       const tableEl = tableContainerRef.current;
@@ -865,11 +917,6 @@ export default function MobileFundTable({
 
   const sectorAuthSegment = relatedSectorSessionKey || 'anon';
 
-  const fetchRelatedSector = useCallback(
-    (code) => fetchRelatedSectors(code, { authSegment: sectorAuthSegment }),
-    [sectorAuthSegment],
-  );
-
   useEffect(() => {
     relatedSectorCacheRef.current.clear();
     setRelatedSectorByCode({});
@@ -886,19 +933,31 @@ export default function MobileFundTable({
 
     let cancelled = false;
     (async () => {
-      await asyncPool(4, missing, async (code) => {
-        const value = await fetchRelatedSector(code);
-        relatedSectorCacheRef.current.set(code, value);
+      try {
+        const batchResults = await fetchRelatedSectorsBatch(missing, { authSegment: sectorAuthSegment });
         if (cancelled) return;
-        setRelatedSectorByCode((prev) => {
-          if (prev[code] === value) return prev;
-          return { ...prev, [code]: value };
+
+        Object.entries(batchResults).forEach(([code, value]) => {
+          relatedSectorCacheRef.current.set(code, value);
         });
-      });
+
+        setRelatedSectorByCode((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const [code, value] of Object.entries(batchResults)) {
+            if (next[code] === value) continue;
+            next[code] = value;
+            changed = true;
+          }
+          return changed ? next : prev;
+        });
+      } catch (e) {
+        console.error('Fetch related sectors batch error (mobile):', e);
+      }
     })();
 
     return () => { cancelled = true; };
-  }, [relatedSectorEnabled, data, sectorAuthSegment, fetchRelatedSector]);
+  }, [relatedSectorEnabled, data, sectorAuthSegment]);
 
   useEffect(() => {
     if (!relatedSectorEnabled) return;
@@ -911,28 +970,50 @@ export default function MobileFundTable({
       const t = lbl != null ? String(lbl).trim() : '';
       if (t) labels.add(t);
     }
-    if (labels.size === 0) return;
+    const labelList = Array.from(labels);
+    if (labelList.length === 0) return;
 
     let cancelled = false;
     (async () => {
-      await asyncPool(4, [...labels], async (label) => {
-        const quote = await fetchRelatedSectorLiveQuote(label);
+      try {
+        // 1. 批量获取 secid
+        const secidResults = await fetchFundSecidsBatch(labelList);
         if (cancelled) return;
+
+        // 2. 批量获取行情
+        const secids = labelList.map(label => secidResults[label]).filter(Boolean);
+        const quotes = await fetchEastmoneySectorQuotesBatch(secids);
+        if (cancelled) return;
+        const batch = {};
+        for (const label of labelList) {
+          const secid = secidResults[label];
+          if (!secid) continue;
+          const quote = quotes[secid];
+          if (quote) batch[label] = quote;
+        }
         setSectorQuoteByLabel((prev) => {
-          const prevQ = prev[label];
-          if (prevQ === quote) return prev;
-          if (
-            prevQ &&
-            quote &&
-            prevQ.pct === quote.pct &&
-            prevQ.name === quote.name &&
-            prevQ.code === quote.code
-          ) {
-            return prev;
+          let changed = false;
+          const next = { ...prev };
+          for (const [label, quote] of Object.entries(batch)) {
+            const prevQ = next[label];
+            if (prevQ === quote) continue;
+            if (
+              prevQ &&
+              quote &&
+              prevQ.pct === quote.pct &&
+              prevQ.name === quote.name &&
+              prevQ.code === quote.code
+            ) {
+              continue;
+            }
+            next[label] = quote;
+            changed = true;
           }
-          return { ...prev, [label]: quote };
+          return changed ? next : prev;
         });
-      });
+      } catch (e) {
+        console.error('Fetch sector quotes batch error (mobile):', e);
+      }
     })();
 
     return () => { cancelled = true; };
@@ -1696,6 +1777,24 @@ export default function MobileFundTable({
         meta: { align: 'right', cellClassName: 'period-return-cell', width: columnWidthMap.period1y ?? 72 },
       },
       {
+        id: 'holdingRatio',
+        header: '持仓占比',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const value = original.holdingRatioValue;
+          if (value == null) {
+            return <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>—</div>;
+          }
+          const text = `${(value * 100).toFixed(2)}%`;
+          return (
+            <FitText style={{ fontWeight: 700, textAlign: 'right' }} maxFontSize={14} minFontSize={10}>
+              {masked ? <span className="mask-text">******</span> : text}
+            </FitText>
+          );
+        },
+        meta: { align: 'right', cellClassName: 'holding-ratio-cell', width: columnWidthMap.holdingRatio ?? 72 },
+      },
+      {
         accessorKey: 'holdingCost',
         header: '持仓成本',
         cell: (info) => {
@@ -2070,37 +2169,6 @@ export default function MobileFundTable({
 
   const headerGroup = table.getHeaderGroups()[0];
   const tableRows = table.getRowModel().rows;
-  const enableVirtualization = data.length > 40;
-  const rowVirtualizer = useWindowVirtualizer({
-    count: tableRows.length,
-    estimateSize: () => 52,
-    measureElement: (el) => el.getBoundingClientRect().height,
-    overscan: 8,
-    scrollMargin: virtualScrollMargin,
-    enabled: enableVirtualization,
-  });
-
-  useLayoutEffect(() => {
-    if (!enableVirtualization) return;
-    const el = virtualScrollAnchorRef.current;
-    if (!el) return;
-    const update = () => {
-      setVirtualScrollMargin(el.getBoundingClientRect().top + window.scrollY);
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    window.addEventListener('resize', update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', update);
-    };
-  }, [enableVirtualization, tableRows.length, stickyTop]);
-
-  useEffect(() => {
-    if (!enableVirtualization) return;
-    rowVirtualizer.measure();
-  }, [enableVirtualization, tableRows.length, rowVirtualizer]);
 
   const snapPositionsRef = useRef([]);
   const scrollEndTimerRef = useRef(null);
@@ -2208,6 +2276,7 @@ export default function MobileFundTable({
             'holdingProfit': 'holding',
             'holdingDays': 'holdingDays',
             'holdingCost': 'holdingCost',
+            'sinceAddedChangePercent': 'sinceAddedChangePercent',
             'period1w': 'last1Week',
             'period1m': 'last1Month',
             'period3m': 'last3Months',
@@ -2217,7 +2286,7 @@ export default function MobileFundTable({
           const sortKey = sortMap[columnId];
           const isSorted = sortBy && sortKey === sortBy;
           let isSortEnabled = sortKey && sortRules.find(r => r.id === sortKey)?.enabled;
-          
+
           // 选择默认排序的时候，隐藏基金名称表头的排序和箭头
           if (sortBy === 'default' && sortKey === 'name') {
             isSortEnabled = false;
@@ -2362,7 +2431,7 @@ export default function MobileFundTable({
         >
           {renderTableHeader()}
 
-          {!onlyShowHeader && enableVirtualization ? (
+          {!onlyShowHeader && (
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -2370,73 +2439,18 @@ export default function MobileFundTable({
               onDragEnd={handleDragEnd}
               onDragCancel={handleDragCancel}
               modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+              dropAnimation={null}
+              autoScroll={false}
             >
               <SortableContext
                 items={data.map((item) => item.code)}
                 strategy={verticalListSortingStrategy}
               >
-                <div
-                  ref={virtualScrollAnchorRef}
-                  className="mobile-fund-table-body-virtual"
-                  style={{ position: 'relative', width: '100%' }}
-                >
-                  <div
-                    style={{
-                      height: rowVirtualizer.getTotalSize(),
-                      position: 'relative',
-                      width: '100%',
-                    }}
-                  >
-                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                      const row = tableRows[virtualRow.index];
-                      if (!row) return null;
-                      return (
-                        <div
-                          key={row.original.code || row.id}
-                          data-index={virtualRow.index}
-                          ref={rowVirtualizer.measureElement}
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
-                            zIndex: activeId === row.original.code ? 9999 : 1,
-                          }}
-                        >
-                          <SortableRow
-                            row={row}
-                            isTableDragging={!!activeId}
-                            disabled={sortBy !== 'default' || !isEditMode}
-                          >
-                            {() => renderMobileRow(row, virtualRow.index)}
-                          </SortableRow>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </SortableContext>
-            </DndContext>
-          ) : !onlyShowHeader ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragCancel={handleDragCancel}
-              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-            >
-              <SortableContext
-                items={data.map((item) => item.code)}
-                strategy={verticalListSortingStrategy}
-              >
-                <AnimatePresence mode="popLayout">
+                <AnimatePresence>
                   {tableRows.map((row, index) => (
                     <SortableRow
                       key={row.original.code || row.id}
                       row={row}
-                      isTableDragging={!!activeId}
                       disabled={sortBy !== 'default' || !isEditMode}
                     >
                       {() => renderMobileRow(row, index)}
@@ -2445,7 +2459,7 @@ export default function MobileFundTable({
                 </AnimatePresence>
               </SortableContext>
             </DndContext>
-          ) : null}
+          )}
         </div>
 
         {table.getRowModel().rows.length === 0 && !onlyShowHeader && (
