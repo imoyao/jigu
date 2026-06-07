@@ -1,19 +1,16 @@
 'use client';
+import { isNumber } from 'lodash';
 
 import { useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import { fetchFundValuationBySource } from '@/app/api/fund';
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 
 function formatGszzlEstimate(gszzl) {
-  const n = typeof gszzl === 'number' ? gszzl : Number(gszzl);
+  const n = isNumber(gszzl) ? gszzl : Number(gszzl);
   if (!Number.isFinite(n)) return '--';
   return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
 }
@@ -24,12 +21,12 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
   const [estimates, setEstimates] = useState({
     1: null,
     2: null,
-    3: null,
+    3: null
   });
   const [valuationSources, setValuationSources] = useState({
     1: null,
     2: null,
-    3: null,
+    3: null
   });
   const [bestSource, setBestSource] = useState(null);
   const [isYesterdayAccuracy, setIsYesterdayAccuracy] = useState(false);
@@ -54,14 +51,12 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
 
     const today = new Date().toISOString().slice(0, 10);
     // 只要有实际涨跌幅，就尝试进行比对
-    const actualZzl = typeof fund.zzl === 'number' && Number.isFinite(fund.zzl)
-      ? fund.zzl
-      : null;
+    const actualZzl = isNumber(fund.zzl) && Number.isFinite(fund.zzl) ? fund.zzl : null;
 
     Promise.all([
       fetchFundValuationBySource(fund.code, 1).catch(() => null),
       fetchFundValuationBySource(fund.code, 2).catch(() => null),
-      fetchFundValuationBySource(fund.code, 3).catch(() => null),
+      fetchFundValuationBySource(fund.code, 3).catch(() => null)
     ]).then(([v1, v2, v3]) => {
       if (!isMounted) return;
       const e1 = formatGszzlEstimate(v1?.gszzl);
@@ -71,16 +66,16 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
       setValuationSources({
         1: v1?.valuationSource,
         2: v2?.valuationSource,
-        3: v3?.valuationSource,
+        3: v3?.valuationSource
       });
 
       if (actualZzl != null) {
         const diffs = [
           { id: 1, val: v1?.gszzl, date: v1?.gztime?.slice(0, 10) },
           { id: 2, val: v2?.gszzl, date: v2?.gztime?.slice(0, 10) },
-          { id: 3, val: v3?.gszzl, date: v3?.gztime?.slice(0, 10) },
+          { id: 3, val: v3?.gszzl, date: v3?.gztime?.slice(0, 10) }
         ]
-          .filter((s) => typeof s.val === 'number' && Number.isFinite(s.val))
+          .filter((s) => isNumber(s.val) && Number.isFinite(s.val))
           // 仅比对日期与基金实际净值日期一致的估值数据
           .filter((s) => s.date === fund.jzrq)
           .map((s) => ({ id: s.id, diff: Math.abs(s.val - actualZzl), date: s.date }));
@@ -109,7 +104,7 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent 
+      <DialogContent
         showCloseButton={false}
         className="glass card modal"
         style={{ maxWidth: '400px', zIndex: 999, width: '90vw', padding: '24px' }}
@@ -120,25 +115,34 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
             <span style={{ fontSize: '18px', fontWeight: 600 }}>切换数据源</span>
           </div>
         </div>
-        
+
         <div style={{ marginBottom: 24 }}>
           {loading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 0', color: 'var(--muted)' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '40px 0',
+                color: 'var(--muted)'
+              }}
+            >
               <Loader2 className="animate-spin mb-4" size={24} />
               <span style={{ fontSize: '14px' }}>正在获取估算数据...</span>
             </div>
           ) : (
-            <RadioGroup 
-              value={sourceId} 
-              onValueChange={setSourceId} 
+            <RadioGroup
+              value={sourceId}
+              onValueChange={setSourceId}
               style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
             >
               {[
                 { id: '1', name: '数据源 1', est: estimates[1] },
                 { id: '2', name: '数据源 2', est: estimates[2] },
-                { id: '3', name: '数据源 3', est: estimates[3] },
+                { id: '3', name: '数据源 3', est: estimates[3] }
               ].map((item) => (
-                <div 
+                <div
                   key={item.id}
                   onClick={() => setSourceId(item.id)}
                   style={{
@@ -159,7 +163,12 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
                       {item.name}
                     </Label>
                     {valuationSources[item.id] === 'supabase_qdii' && (
-                      <Badge variant="outline" className="ml-1 text-[10px] px-1.5 py-0 h-4 min-h-0 leading-none border-orange-500 text-orange-500 bg-orange-500/10">限免</Badge>
+                      <Badge
+                        variant="outline"
+                        className="ml-1 text-[10px] px-1.5 py-0 h-4 min-h-0 leading-none border-orange-500 text-orange-500 bg-orange-500/10"
+                      >
+                        限免
+                      </Badge>
                     )}
                     {bestSource === Number(item.id) && (
                       <Badge variant="destructive" className="ml-1 text-[10px] px-1.5 py-0 h-4 min-h-0 leading-none">
@@ -167,11 +176,19 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
                       </Badge>
                     )}
                   </div>
-                  <span 
-                    className={item.est === '--' ? 'muted' : item.est.startsWith('+') ? 'up' : item.est.startsWith('-') ? 'down' : 'muted'}
-                    style={{ 
-                      fontSize: '16px', 
-                      fontWeight: 500,
+                  <span
+                    className={
+                      item.est === '--'
+                        ? 'muted'
+                        : item.est.startsWith('+')
+                          ? 'up'
+                          : item.est.startsWith('-')
+                            ? 'down'
+                            : 'muted'
+                    }
+                    style={{
+                      fontSize: '16px',
+                      fontWeight: 500
                     }}
                   >
                     {item.est}
@@ -183,10 +200,10 @@ export default function FundDataSourceSelector({ fund, onClose, onSelect }) {
         </div>
 
         <div className="row" style={{ gap: 12 }}>
-          <button 
-            type="button" 
-            className="button secondary" 
-            onClick={onClose} 
+          <button
+            type="button"
+            className="button secondary"
+            onClick={onClose}
             style={{ flex: 1, background: 'rgba(255,255,255,0.05)', color: 'var(--text)' }}
           >
             取消

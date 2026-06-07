@@ -11,26 +11,23 @@
  * - rate: 当日收益率（百分比数值，如 1.23 表示 +1.23%），基于用户成本价计算，即 (当日收益 / 成本金额) × 100
  * - baseCostAmount: 当日成本快照金额（元），用于冻结当日收益率分母
  */
-import { isPlainObject, isString, isNumber } from 'lodash';
+import { isArray, isNumber, isObject, isPlainObject, isString } from 'lodash';
 import { storageStore } from '@/app/stores';
+import { DAILY_EARNINGS_SCOPE_ALL } from '@/app/constants';
 
 const STORAGE_KEY = 'fundDailyEarnings';
-export const DAILY_EARNINGS_SCOPE_ALL = 'all';
 
 function normalizeItem(item) {
-  if (!item || typeof item !== 'object') return null;
+  if (!item || !isObject(item)) return null;
   const date = item.date;
   const earnings = item.earnings;
   const rate = item.rate;
   const baseCostAmount = item.baseCostAmount;
   if (!isString(date) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   if (!isNumber(earnings) || !Number.isFinite(earnings)) return null;
-  const normalizedRate =
-    isNumber(rate) && Number.isFinite(rate) ? rate : null;
+  const normalizedRate = isNumber(rate) && Number.isFinite(rate) ? rate : null;
   const normalizedBaseCostAmount =
-    isNumber(baseCostAmount) && Number.isFinite(baseCostAmount) && baseCostAmount > 0
-      ? baseCostAmount
-      : null;
+    isNumber(baseCostAmount) && Number.isFinite(baseCostAmount) && baseCostAmount > 0 ? baseCostAmount : null;
   return { date, earnings, rate: normalizedRate, baseCostAmount: normalizedBaseCostAmount };
 }
 
@@ -66,23 +63,26 @@ export function recordDailyEarnings(code, earnings, dateStr) {
 
   // 兼容老调用：recordDailyEarnings(code, earnings, dateStr, rate)
   const rate = arguments.length >= 4 ? arguments[3] : null;
-  const scope = arguments.length >= 5 && isString(arguments[4]) && arguments[4]
-    ? arguments[4]
-    : DAILY_EARNINGS_SCOPE_ALL;
+  const scope =
+    arguments.length >= 5 && isString(arguments[4]) && arguments[4] ? arguments[4] : DAILY_EARNINGS_SCOPE_ALL;
   const normalizedRate = isNumber(rate) && Number.isFinite(rate) ? rate : null;
 
   const all = getStored();
   const scoped = isPlainObject(all[scope]) ? all[scope] : {};
-  const list = Array.isArray(scoped[code]) ? scoped[code] : [];
-  const existingIndex = list.findIndex(item => item.date === dateStr);
+  const list = isArray(scoped[code]) ? scoped[code] : [];
+  const existingIndex = list.findIndex((item) => item.date === dateStr);
 
-  const baseCostAmount = arguments.length >= 6 && isNumber(arguments[5]) && Number.isFinite(arguments[5]) && arguments[5] > 0
-    ? arguments[5]
-    : null;
+  const baseCostAmount =
+    arguments.length >= 6 && isNumber(arguments[5]) && Number.isFinite(arguments[5]) && arguments[5] > 0
+      ? arguments[5]
+      : null;
 
-  const nextList = existingIndex >= 0
-    ? list.map((item, i) => i === existingIndex ? { date: dateStr, earnings, rate: normalizedRate, baseCostAmount } : item)
-    : [...list, { date: dateStr, earnings, rate: normalizedRate, baseCostAmount }];
+  const nextList =
+    existingIndex >= 0
+      ? list.map((item, i) =>
+          i === existingIndex ? { date: dateStr, earnings, rate: normalizedRate, baseCostAmount } : item
+        )
+      : [...list, { date: dateStr, earnings, rate: normalizedRate, baseCostAmount }];
 
   nextList.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -94,7 +94,7 @@ export function recordDailyEarnings(code, earnings, dateStr) {
 export function getDailyEarnings(code, scope = DAILY_EARNINGS_SCOPE_ALL) {
   const all = getStored();
   const scoped = isPlainObject(all[scope]) ? all[scope] : {};
-  const list = Array.isArray(scoped[code]) ? scoped[code] : [];
+  const list = isArray(scoped[code]) ? scoped[code] : [];
   return list.map(normalizeItem).filter(Boolean);
 }
 
@@ -146,7 +146,7 @@ export function aggregatePortfolioDailyEarnings(fundDailyEarningsMap) {
   const byDate = new Map();
   for (const code of Object.keys(fundDailyEarningsMap)) {
     const list = fundDailyEarningsMap[code];
-    if (!Array.isArray(list)) continue;
+    if (!isArray(list)) continue;
     for (const raw of list) {
       const item = normalizeItem(raw);
       if (!item) continue;
