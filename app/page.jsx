@@ -105,6 +105,7 @@ import {
 
 import { dedupeByCode, normalizeCode, cleanCodeArray } from './lib/normalize';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { formatMoney } from '@/lib/utils';
 
 export default function HomePage() {
   const {
@@ -121,6 +122,8 @@ export default function HomePage() {
     setCollapsedCodes,
     collapsedTrends,
     setCollapsedTrends,
+    collapsedValuationTrends,
+    setCollapsedValuationTrends,
     collapsedEarnings,
     setCollapsedEarnings,
     refreshMs,
@@ -628,15 +631,27 @@ export default function HomePage() {
         list.forEach((item) => {
           const date = item?.date ? String(item.date) : '';
           const earnings = Number(item?.earnings);
+          const baseCostAmount = Number(item?.baseCostAmount);
           if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
           if (!Number.isFinite(earnings)) return;
-          byDate.set(date, (byDate.get(date) ?? 0) + earnings);
+
+          const prev = byDate.get(date) || { earnings: 0, baseCostAmount: 0 };
+          prev.earnings += earnings;
+          if (Number.isFinite(baseCostAmount) && baseCostAmount > 0) {
+            prev.baseCostAmount += baseCostAmount;
+          }
+          byDate.set(date, prev);
         });
       });
     });
     return [...byDate.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, earnings]) => ({ date, earnings, rate: null }));
+      .map(([date, data]) => ({
+        date,
+        earnings: data.earnings,
+        baseCostAmount: data.baseCostAmount > 0 ? data.baseCostAmount : null,
+        rate: null
+      }));
   }, [fundDailyEarnings]);
 
   const holdingsForTabWithLinked = useMemo(() => {
@@ -789,7 +804,13 @@ export default function HomePage() {
       filtered = filtered.filter((f) => {
         const name = String(f?.name ?? '').toLowerCase();
         const code = String(f?.code ?? '').toLowerCase();
-        return name.includes(qLower) || code.includes(qLower);
+        let hasTagMatch = false;
+        if (f?.code && Array.isArray(fundTagListsByCode?.[f.code])) {
+          hasTagMatch = fundTagListsByCode[f.code].some(
+            (t) => t?.name && String(t.name).toLowerCase().includes(qLower)
+          );
+        }
+        return name.includes(qLower) || code.includes(qLower) || hasTagMatch;
       });
     }
 
@@ -942,14 +963,23 @@ export default function HomePage() {
           if (!isArray(list) || list.length === 0) return null;
           let matchedDaily = null;
           if (isString(jzrq)) {
-            for (const item of list) {
-              if (item?.date === jzrq) {
-                matchedDaily = item;
-                break;
+            if (jzrq === todayStr) {
+              for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i]?.date && list[i].date < todayStr) {
+                  matchedDaily = list[i];
+                  break;
+                }
+              }
+            } else {
+              for (const item of list) {
+                if (item?.date === jzrq) {
+                  matchedDaily = item;
+                  break;
+                }
               }
             }
           }
-          if (!matchedDaily) matchedDaily = list[list.length - 1];
+          if (!matchedDaily && jzrq !== todayStr) matchedDaily = list[list.length - 1];
           return matchedDaily && Number.isFinite(Number(matchedDaily.earnings)) ? Number(matchedDaily.earnings) : null;
         };
         const valA = getYesterdayProfit(a.code, a.jzrq);
@@ -1162,10 +1192,7 @@ export default function HomePage() {
         (currentTab === 'all' || currentTab === 'fav') && linkedHoldingsForAllFav.linked?.has?.(f.code);
       const profit = getHoldingProfitForTab(f, holding);
       const amount = profit ? profit.amount : null;
-      const holdingAmount =
-        amount == null
-          ? '未设置'
-          : `¥${Number(amount).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      const holdingAmount = amount == null ? '未设置' : `¥${formatMoney(amount)}`;
       const holdingAmountValue = amount;
       const holdingRatioValue =
         amount != null && Number.isFinite(amount) && amount > 0 && groupTotalHoldingAmount > 0
@@ -1179,17 +1206,14 @@ export default function HomePage() {
       const todayProfit =
         profitToday == null
           ? ''
-          : `${profitToday > 0 ? '+' : profitToday < 0 ? '-' : ''}${Math.abs(profitToday).toFixed(2)}`;
+          : `${profitToday > 0 ? '+' : profitToday < 0 ? '-' : ''}${formatMoney(Math.abs(profitToday))}`;
       const todayProfitValue = profitToday;
 
       const total = profit ? profit.profitTotal : null;
       const principal = holding && isNumber(holding.cost) && isNumber(holding.share) ? holding.cost * holding.share : 0;
       const holdingCostValue =
         holding && isNumber(holding.cost) && isNumber(holding.share) ? holding.cost * holding.share : null;
-      const holdingCost =
-        holdingCostValue == null
-          ? '-'
-          : Number(holdingCostValue).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const holdingCost = holdingCostValue == null ? '-' : formatMoney(holdingCostValue);
       const costNavValue = holding && isNumber(holding.cost) ? holding.cost : null;
       const costNav = costNavValue == null ? '—' : Number(costNavValue).toFixed(4);
       const todayProfitPercent =
@@ -1199,31 +1223,51 @@ export default function HomePage() {
 
       const latestNavDateStr = isString(f.jzrq) ? f.jzrq : '';
       const dailyMeta = latestDailyByCode?.[f.code];
-      const matchedDaily =
-        (latestNavDateStr ? dailyMeta?.byDate?.get(latestNavDateStr) || null : null) || dailyMeta?.last || null;
+      const dailyList = currentFundDailyEarnings?.[f.code];
+
+      // 解析昨日收益对应的记录（避免当晚更新今日净值后，“昨日收益”显示成“今日收益”）
+      let yesterdayMatchedDaily = null;
+      if (isArray(dailyList) && dailyList.length > 0) {
+        if (latestNavDateStr === todayStr) {
+          // 如果最新净值日期已更新为今天，昨日收益取今天之前的最后一个记录
+          for (let i = dailyList.length - 1; i >= 0; i--) {
+            if (dailyList[i]?.date && dailyList[i].date < todayStr) {
+              yesterdayMatchedDaily = dailyList[i];
+              break;
+            }
+          }
+        } else {
+          // 否则取最新净值日期对应的记录或最后一个记录
+          yesterdayMatchedDaily =
+            (latestNavDateStr ? dailyMeta?.byDate?.get(latestNavDateStr) || null : null) || dailyMeta?.last || null;
+        }
+      }
+
       const yesterdayProfitVal =
-        matchedDaily && Number.isFinite(Number(matchedDaily.earnings)) ? Number(matchedDaily.earnings) : null;
+        yesterdayMatchedDaily && Number.isFinite(Number(yesterdayMatchedDaily.earnings))
+          ? Number(yesterdayMatchedDaily.earnings)
+          : null;
       const yesterdayProfit =
         yesterdayProfitVal == null
           ? ''
-          : `${yesterdayProfitVal > 0 ? '+' : yesterdayProfitVal < 0 ? '-' : ''}${Math.abs(yesterdayProfitVal).toFixed(2)}`;
+          : `${yesterdayProfitVal > 0 ? '+' : yesterdayProfitVal < 0 ? '-' : ''}${formatMoney(Math.abs(yesterdayProfitVal))}`;
       const dailyBaseCostAmount =
-        matchedDaily &&
-        matchedDaily.baseCostAmount != null &&
-        matchedDaily.baseCostAmount !== '' &&
-        Number.isFinite(Number(matchedDaily.baseCostAmount))
-          ? Number(matchedDaily.baseCostAmount)
+        yesterdayMatchedDaily &&
+        yesterdayMatchedDaily.baseCostAmount != null &&
+        yesterdayMatchedDaily.baseCostAmount !== '' &&
+        Number.isFinite(Number(yesterdayMatchedDaily.baseCostAmount))
+          ? Number(yesterdayMatchedDaily.baseCostAmount)
           : null;
       const derivedRateFromSnapshot =
         yesterdayProfitVal != null && dailyBaseCostAmount != null && dailyBaseCostAmount > 0
           ? (yesterdayProfitVal / dailyBaseCostAmount) * 100
           : null;
       const dailyRate =
-        matchedDaily &&
-        matchedDaily.rate != null &&
-        matchedDaily.rate !== '' &&
-        Number.isFinite(Number(matchedDaily.rate))
-          ? Number(matchedDaily.rate)
+        yesterdayMatchedDaily &&
+        yesterdayMatchedDaily.rate != null &&
+        yesterdayMatchedDaily.rate !== '' &&
+        Number.isFinite(Number(yesterdayMatchedDaily.rate))
+          ? Number(yesterdayMatchedDaily.rate)
           : derivedRateFromSnapshot;
       const yesterdayProfitPercentLine =
         dailyRate != null
@@ -1239,7 +1283,7 @@ export default function HomePage() {
             : null;
 
       const holdingProfit =
-        total == null ? '' : `${total > 0 ? '+' : total < 0 ? '-' : ''}${Math.abs(total).toFixed(2)}`;
+        total == null ? '' : `${total > 0 ? '+' : total < 0 ? '-' : ''}${formatMoney(Math.abs(total))}`;
       const holdingProfitPercent =
         total != null && principal > 0
           ? `${total > 0 ? '+' : total < 0 ? '-' : ''}${Math.abs((total / principal) * 100).toFixed(2)}%`
@@ -1262,7 +1306,7 @@ export default function HomePage() {
       const estimateProfit =
         estimateProfitValue == null
           ? ''
-          : `${estimateProfitValue > 0 ? '+' : estimateProfitValue < 0 ? '-' : ''}${Math.abs(estimateProfitValue).toFixed(2)}`;
+          : `${estimateProfitValue > 0 ? '+' : estimateProfitValue < 0 ? '-' : ''}${formatMoney(Math.abs(estimateProfitValue))}`;
       const estimateProfitPercent =
         estimateProfitPercentValue == null
           ? ''
@@ -1372,7 +1416,6 @@ export default function HomePage() {
     currentTab,
     summaryHoldingSourceGroupByCode,
     linkedHoldingsForAllFav,
-    // fundTagRecords 已移除：fundTagListsByCode 是其派生值，两者同时存在会导致标签变化时双重触发
     fundTagListsByCode,
     groupTotalHoldingAmount
   ]);
@@ -2040,6 +2083,21 @@ export default function HomePage() {
       });
     },
     [fundTagRecords]
+  );
+
+  const toggleValuationTrendCollapse = useCallback(
+    (code) => {
+      setCollapsedValuationTrends((prev) => {
+        const next = new Set(prev);
+        if (next.has(code)) {
+          next.delete(code);
+        } else {
+          next.add(code);
+        }
+        return next;
+      });
+    },
+    [setCollapsedValuationTrends]
   );
 
   const handleSaveFundTags = useCallback(
@@ -4178,6 +4236,7 @@ export default function HomePage() {
         valuationSeries,
         collapsedCodes,
         collapsedTrends,
+        collapsedValuationTrends,
         collapsedEarnings,
         transactions: transactionsForTab,
         theme,
@@ -4193,6 +4252,7 @@ export default function HomePage() {
         onTodayPercentModeToggle: toggleTodayPercentMode,
         onToggleCollapse: toggleCollapse,
         onToggleTrendCollapse: toggleTrendCollapse,
+        onToggleValuationTrendCollapse: toggleValuationTrendCollapse,
         onToggleEarningsCollapse: toggleEarningsCollapse,
         masked: maskAmounts,
         layoutMode: 'drawer',
@@ -4201,7 +4261,8 @@ export default function HomePage() {
         onFundTagsClick: openFundTagsEdit,
         fundExtraData: fundExtraDataByCode[fund.code] || fund.fundExtraData,
         groupTotalHoldingAmount,
-        hasPending: pendingCodesForTab.has(fund.code)
+        hasPending: pendingCodesForTab.has(fund.code),
+        userId: user?.id
       };
     },
     [
@@ -4216,6 +4277,7 @@ export default function HomePage() {
       valuationSeries,
       collapsedCodes,
       collapsedTrends,
+      collapsedValuationTrends,
       collapsedEarnings,
       transactionsForTab,
       theme,
@@ -4230,12 +4292,14 @@ export default function HomePage() {
       toggleTodayPercentMode,
       toggleCollapse,
       toggleTrendCollapse,
+      toggleValuationTrendCollapse,
       toggleEarningsCollapse,
       maskAmounts,
       openFundTagsEdit,
       fundExtraDataByCode,
       groupTotalHoldingAmount,
-      pendingCodesForTab
+      pendingCodesForTab,
+      user?.id
     ]
   );
 
@@ -4961,6 +5025,7 @@ export default function HomePage() {
                             valuationSeries={valuationSeries}
                             collapsedCodes={collapsedCodes}
                             collapsedTrends={collapsedTrends}
+                            collapsedValuationTrends={collapsedValuationTrends}
                             collapsedEarnings={collapsedEarnings}
                             transactionsForTab={transactionsForTab}
                             theme={theme}
@@ -4974,6 +5039,7 @@ export default function HomePage() {
                             toggleTodayPercentMode={toggleTodayPercentMode}
                             toggleCollapse={toggleCollapse}
                             toggleTrendCollapse={toggleTrendCollapse}
+                            toggleValuationTrendCollapse={toggleValuationTrendCollapse}
                             toggleEarningsCollapse={toggleEarningsCollapse}
                             fundTagListsByCode={fundTagListsByCode}
                             groupTotalHoldingAmount={groupTotalHoldingAmount}

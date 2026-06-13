@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { storageStore } from '../stores';
 
-const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.1.0';
+const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.2.1';
 
 export default function Announcement() {
   const [isVisible, setIsVisible] = useState(false);
@@ -109,11 +109,10 @@ export default function Announcement() {
                 paddingRight: '4px'
               }}
             >
-              <p>v2.1.0 版本更新内容：</p>
-              <p>1. 普通用户 OCR 截图识别增加次数限制。</p>
-              <p>2. 修复PC端部分弹框无法关闭问题。</p>
-              <p>3. 行情数据支持分页。</p>
-              <p>4. 优化实时估值分时图 y 轴坐标颜色。</p>
+              <p>v2.2.1 版本更新内容：</p>
+              <p>1. 行情页面分页数量调整为 5 页。</p>
+              <p>2. 盘中支持显示昨日最准及昨日误差（限免）。</p>
+              <p>3. 新增估值走势（限免）。</p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
               <button

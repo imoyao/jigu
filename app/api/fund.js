@@ -1026,6 +1026,34 @@ export const fetchQdiiValuationFromSupabase = async (code) => {
 };
 
 /**
+ * 通过 Edge Function best-valuation-source 查询指定日期各数据源估值，
+ * 与实际涨跌幅比对，返回最准确的数据源编号。
+ *
+ * @param {string} code - 基金代码
+ * @param {string} jzrq - 最新净值日期（如 "2026-06-10"）
+ * @param {number} actualZzl - 实际涨跌幅（百分比，如 1.23 表示 +1.23%）
+ * @returns {Promise<{ bestSource: number|null, isYesterdayAccuracy: boolean }|null>}
+ */
+export async function fetchBestValuationSource(code, jzrq, actualZzl) {
+  if (!isSupabaseConfigured || !supabase?.functions?.invoke) return null;
+  const c = code != null ? String(code).trim() : '';
+  if (!c || !jzrq || !isNumber(actualZzl) || !Number.isFinite(actualZzl)) return null;
+
+  try {
+    const { data, error } = await withRetry(() =>
+      supabase.functions.invoke('best-valuation-source', {
+        body: { code: c, jzrq, actualZzl }
+      })
+    );
+
+    if (error || !data?.success) return null;
+    return data.data || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * 按基金编码与数据源类型获取估值（天天基金 fundgz 或新浪估算曲线末点）。
  * @param {string} code - 基金编码
  * @param {number | string} [dataSource=1] - 1 天天基金；2、3 新浪估算不同口径
@@ -2111,8 +2139,9 @@ export const fetchFundHistory = async (code, range = '1m') => {
         .filter((d) => d.x >= effectiveStartMs && d.x <= endMs)
         .map((d) => {
           const value = Number(d.y);
+          const equityReturn = isNumber(d.equityReturn) ? Number(d.equityReturn) : null;
           const date = dayjs(d.x).tz(TZ).format('YYYY-MM-DD');
-          return { date, value };
+          return { date, value, equityReturn };
         });
 
       // 解析 Data_grandTotal 为多条对比曲线，使用同一有效起始日
@@ -2147,6 +2176,20 @@ export const fetchFundHistory = async (code, range = '1m') => {
     return [];
   }
   return [];
+};
+
+export const fetchFundValuationTrend = async (code, range = '3m') => {
+  if (!isSupabaseConfigured) return [];
+  if (!supabase?.functions?.invoke) return [];
+
+  const { data, error } = await withRetry(() =>
+    supabase.functions.invoke('get-fund-valuation-trend', {
+      body: { fund_code: code, range }
+    })
+  );
+
+  if (error || !data || data.error) return [];
+  return isArray(data.data) ? data.data : [];
 };
 
 export const parseFundTextWithLLM = async (text) => {

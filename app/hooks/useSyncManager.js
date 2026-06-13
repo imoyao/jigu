@@ -26,6 +26,7 @@ import {
   nowInTz,
   toTz
 } from '../lib/fundHelpers';
+import { calculateYtdReturnRate, mergeAllScopedDailyEarnings, mergeAllHoldings } from '../lib/dailyEarnings';
 
 export const normalizeFundDailyEarningsScoped = (source) => {
   if (!isPlainObject(source)) return {};
@@ -147,6 +148,12 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
     const collapsedTrends = isArray(payload.collapsedTrends)
       ? Array.from(
           new Set(payload.collapsedTrends.map(normalizeCode).filter((code) => uniqueFundCodes.includes(code)))
+        ).sort()
+      : [];
+
+    const collapsedValuationTrends = isArray(payload.collapsedValuationTrends)
+      ? Array.from(
+          new Set(payload.collapsedValuationTrends.map(normalizeCode).filter((code) => uniqueFundCodes.includes(code)))
         ).sort()
       : [];
 
@@ -372,6 +379,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
       groups,
       collapsedCodes,
       collapsedTrends,
+      collapsedValuationTrends,
       refreshMs: Number.isFinite(payload.refreshMs) ? payload.refreshMs : 30000,
       holdings,
       groupHoldings: groupHoldingsNorm,
@@ -404,6 +412,9 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
       }
       if (!keys || keys.has('collapsedTrends')) {
         all.collapsedTrends = storageStore.getItem('collapsedTrends', []);
+      }
+      if (!keys || keys.has('collapsedValuationTrends')) {
+        all.collapsedValuationTrends = storageStore.getItem('collapsedValuationTrends', []);
       }
       if (!keys || keys.has('collapsedEarnings')) {
         all.collapsedEarnings = storageStore.getItem('collapsedEarnings', []);
@@ -467,6 +478,9 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
           : [];
         const cleanedCollapsedTrends = isArray(all.collapsedTrends)
           ? all.collapsedTrends.filter((code) => fundCodes.has(code))
+          : [];
+        const cleanedCollapsedValuationTrends = isArray(all.collapsedValuationTrends)
+          ? all.collapsedValuationTrends.filter((code) => fundCodes.has(code))
           : [];
         const cleanedCollapsedEarnings = isArray(all.collapsedEarnings)
           ? all.collapsedEarnings.filter((code) => fundCodes.has(code))
@@ -577,6 +591,11 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
               .filter(Boolean)
           : [];
 
+        // 合并所有 scope 的收益数据和 holdings 来计算 YTD 收益率
+        const mergedEarningsForYtd = mergeAllScopedDailyEarnings(cleanedFundDailyEarnings);
+        const mergedHoldingsForYtd = mergeAllHoldings(cleanedHoldings, cleanedGroupHoldings);
+        const ytdReturnRate = calculateYtdReturnRate(mergedEarningsForYtd, mergedHoldingsForYtd);
+
         return {
           funds: all.funds,
           tags: cleanedTags,
@@ -584,6 +603,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
           groups: cleanedGroups,
           collapsedCodes: cleanedCollapsed,
           collapsedTrends: cleanedCollapsedTrends,
+          collapsedValuationTrends: cleanedCollapsedValuationTrends,
           collapsedEarnings: cleanedCollapsedEarnings,
           refreshMs: all.refreshMs,
           holdings: cleanedHoldings,
@@ -593,8 +613,24 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
           dcaPlans: cleanedDcaPlans,
           customSettings: isPlainObject(all.customSettings) ? all.customSettings : {},
           fundDailyEarnings: cleanedFundDailyEarnings,
-          fundValuationTimeseries: isPlainObject(all.fundValuationTimeseries) ? all.fundValuationTimeseries : {}
+          fundValuationTimeseries: isPlainObject(all.fundValuationTimeseries) ? all.fundValuationTimeseries : {},
+          ytdReturnRate
         };
+      } else {
+        // 增量同步时，也一并计算并上报 ytdReturnRate，以免云端 ytd_return_rate 长期为空
+        try {
+          const rawHoldings = storageStore.getItem('holdings', {});
+          const rawGroupHoldings = storageStore.getItem('groupHoldings', {});
+          const rawEarnings = storageStore.getItem('fundDailyEarnings', {});
+          const scopedDaily = normalizeFundDailyEarningsScoped(rawEarnings);
+          // 合并所有 scope 的收益数据和 holdings
+          const mergedEarnings = mergeAllScopedDailyEarnings(scopedDaily);
+          const mergedHoldings = mergeAllHoldings(rawHoldings, rawGroupHoldings);
+          const ytdReturnRate = calculateYtdReturnRate(mergedEarnings, mergedHoldings);
+          all.ytdReturnRate = ytdReturnRate;
+        } catch (e) {
+          console.warn('Failed to calculate ytdReturnRate for partial sync', e);
+        }
       }
 
       return all;
@@ -607,6 +643,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
         groups: [],
         collapsedCodes: [],
         collapsedTrends: [],
+        collapsedValuationTrends: [],
         collapsedEarnings: [],
         refreshMs: 30000,
         holdings: {},
@@ -831,6 +868,7 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
       'groups',
       'collapsedCodes',
       'collapsedTrends',
+      'collapsedValuationTrends',
       'collapsedEarnings',
       'refreshMs',
       'holdings',
@@ -968,6 +1006,9 @@ export function useSyncManager({ showToast, refreshAllRef, setTempSeconds, setFu
 
         if (isArray(cloudData.collapsedTrends)) {
           useStorageStore.getState().setCollapsedTrends(new Set(cloudData.collapsedTrends));
+        }
+        if (isArray(cloudData.collapsedValuationTrends)) {
+          useStorageStore.getState().setCollapsedValuationTrends(new Set(cloudData.collapsedValuationTrends));
         }
         if (isArray(cloudData.collapsedEarnings)) {
           useStorageStore.getState().setCollapsedEarnings(new Set(cloudData.collapsedEarnings));

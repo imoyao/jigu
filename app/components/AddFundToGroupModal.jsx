@@ -7,7 +7,7 @@ import { CloseIcon, PlusIcon } from './Icons';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { getTagThemeBadgeProps } from './AddTagDialog';
-import { cn } from '@/lib/utils';
+import { cn, formatMoney } from '@/lib/utils';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 export default function AddFundToGroupModal({
@@ -98,7 +98,7 @@ export default function AddFundToGroupModal({
           </button>
         </div>
 
-        <Alert style={{ marginBottom: 16 }}>
+        <Alert style={{ marginBottom: 16 }} variant="info">
           <Info className="h-4 w-4" />
           <AlertDescription>
             在此添加的基金不会代入原有持仓金额。如需带金额迁移，请使用「分组迁移」功能。
@@ -188,7 +188,7 @@ export default function AddFundToGroupModal({
                       <div className="muted" style={{ fontSize: '12px', marginTop: 2 }}>
                         持仓金额：
                         <span style={{ color: 'var(--foreground)', fontWeight: 500 }}>
-                          {getHoldingAmount(fund).toFixed(2)}
+                          {formatMoney(getHoldingAmount(fund))}
                         </span>
                       </div>
                     )}
