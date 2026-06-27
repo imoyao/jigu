@@ -927,6 +927,7 @@ function normalizeValuationDataSource(dataSource) {
   const n = Number(dataSource);
   if (n === 2) return 2;
   if (n === 3) return 3;
+  if (n === 4) return 4;
   return 1;
 }
 
@@ -999,7 +1000,7 @@ function fetchSinaEstimateNetworthResponse(code) {
  */
 
 /**
- * 从 Supabase gs_qdii 表获取 QDII 基金的估值数据（作为天天基金数据源 1 的 fallback）
+ * 从 Supabase gs_qdii 表获取 QDII 基金的估值数据（数据源 4）
  */
 export const fetchQdiiValuationFromSupabase = async (code) => {
   if (!code || !isSupabaseConfigured) return null;
@@ -1026,18 +1027,53 @@ export const fetchQdiiValuationFromSupabase = async (code) => {
 };
 
 /**
+ * 检查指定基金编码是否存在于 Supabase gs_qdii 表中
+ * 结果通过 TanStack Query 缓存 12 小时。
+ * @param {string} code - 基金编码
+ * @returns {Promise<boolean>}
+ */
+export const isQdiiFund = async (code) => {
+  if (!code || !isSupabaseConfigured) return false;
+  const normalized = String(code).trim();
+  if (!normalized) return false;
+
+  const qc = getQueryClient();
+  try {
+    return await qc.fetchQuery({
+      queryKey: qk.isQdiiFund(normalized),
+      queryFn: async () => {
+        const { data, error } = await withRetry(() =>
+          supabase.from('gs_qdii').select('fund_code').eq('fund_code', normalized).maybeSingle()
+        );
+        return !error && data != null;
+      },
+      staleTime: 12 * 60 * 60 * 1000
+    });
+  } catch {
+    return false;
+  }
+};
+
+/**
  * 通过 Edge Function best-valuation-source 查询指定日期各数据源估值，
  * 与实际涨跌幅比对，返回最准确的数据源编号。
  *
  * @param {string} code - 基金代码
  * @param {string} jzrq - 最新净值日期（如 "2026-06-10"）
  * @param {number} actualZzl - 实际涨跌幅（百分比，如 1.23 表示 +1.23%）
- * @returns {Promise<{ bestSource: number|null, isYesterdayAccuracy: boolean }|null>}
+ * @returns {Promise<{ bestSource: number|null, isYesterdayAccuracy: boolean, isTodayAccuracy: boolean, diffs: Object<string,number>, diff?: number }|null>}
  */
 export async function fetchBestValuationSource(code, jzrq, actualZzl) {
   if (!isSupabaseConfigured || !supabase?.functions?.invoke) return null;
   const c = code != null ? String(code).trim() : '';
   if (!c || !jzrq || !isNumber(actualZzl) || !Number.isFinite(actualZzl)) return null;
+
+  const qc = getQueryClient();
+  const cacheKey = qk.bestValuationSource(c, jzrq, actualZzl);
+  const cached = qc.getQueryData(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
 
   try {
     const { data, error } = await withRetry(() =>
@@ -1047,26 +1083,119 @@ export async function fetchBestValuationSource(code, jzrq, actualZzl) {
     );
 
     if (error || !data?.success) return null;
-    return data.data || null;
+    const res = data.data || null;
+    qc.setQueryData(cacheKey, res, { staleTime: 60 * 60 * 1000 });
+    return res;
   } catch (e) {
     return null;
   }
 }
 
 /**
+ * 调用 Supabase RPC 获取基金最佳数据源（从 fund_pingzhongdata 表中预计算的 source 字段）
+ * @param {string} fundCode - 基金编码
+ * @returns {Promise<number|null>} 数据源 ID (1/2/3) 或 null
+ */
+const SOURCE_NAME_TO_ID = { fundgz: 1, sina_ds2: 2, sina_ds3: 3, supabase_qdii: 4 };
+
+export async function fetchFundBestSource(fundCode) {
+  if (!isSupabaseConfigured) return null;
+  const code = fundCode != null ? String(fundCode).trim() : '';
+  if (!code) return null;
+
+  const qc = getQueryClient();
+  const cacheKey = qk.fundBestSource(code);
+  const cached = qc.getQueryData(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('get_fund_best_source', {
+      p_fund_code: code
+    });
+    if (error || !data?.source) return null;
+    const res = SOURCE_NAME_TO_ID[data.source] ?? null;
+    if (res != null) {
+      qc.setQueryData(cacheKey, res, { staleTime: 60 * 60 * 1000 });
+    }
+    return res;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 批量获取多个基金的最佳数据源
+ * @param {string[]} fundCodes - 基金编码数组
+ * @returns {Promise<Record<string, number>>} 返回对象格式 { "110022": 1, "000001": 2 }
+ */
+export async function fetchFundsBestSources(fundCodes) {
+  if (!isSupabaseConfigured || !isArray(fundCodes) || fundCodes.length === 0) return {};
+
+  const qc = getQueryClient();
+  const result = {};
+  const missingCodes = [];
+
+  for (const c of fundCodes) {
+    const code = c != null ? String(c).trim() : '';
+    if (!code) continue;
+    const cached = qc.getQueryData(qk.fundBestSource(code));
+    if (cached !== undefined) {
+      result[code] = cached;
+    } else {
+      missingCodes.push(code);
+    }
+  }
+
+  if (missingCodes.length === 0) return result;
+
+  try {
+    const { data, error } = await supabase.rpc('get_fund_best_source', {
+      p_fund_codes: missingCodes
+    });
+    if (error || !data) return result;
+
+    // 返回的 data 类似 { "110022": "sina_ds2", "000001": "fundgz" }
+    Object.entries(data).forEach(([code, sourceName]) => {
+      const id = SOURCE_NAME_TO_ID[sourceName];
+      if (id != null) {
+        result[code] = id;
+        qc.setQueryData(qk.fundBestSource(code), id, { staleTime: 60 * 60 * 1000 });
+      }
+    });
+    return result;
+  } catch {
+    return result;
+  }
+}
+
+/**
  * 按基金编码与数据源类型获取估值（天天基金 fundgz 或新浪估算曲线末点）。
  * @param {string} code - 基金编码
- * @param {number | string} [dataSource=1] - 1 天天基金；2、3 新浪估算不同口径
+ * @param {number | string} [dataSource=1] - 1 天天基金；2、3 新浪估算不同口径；4 Supabase QDII
  * @returns {Promise<UnifiedFundValuation>}
  */
 export async function fetchFundValuationBySource(code, dataSource = 1) {
-  if (typeof window === 'undefined' || typeof document === 'undefined') {
-    throw new Error('无浏览器环境');
-  }
   const c = code != null ? String(code).trim() : '';
   if (!c) throw new Error('基金编码无效');
 
   const ds = normalizeValuationDataSource(dataSource);
+
+  // 数据源 4：Supabase gs_qdii 表
+  if (ds === 4) {
+    const qdii = await fetchQdiiValuationFromSupabase(c);
+    if (!qdii) throw new Error('gs_qdii no data');
+    return {
+      code: c,
+      ...qdii,
+      gsz: null // 由 fetchFundData 等调用方配合 dwjz 计算
+    };
+  }
+
+  if (typeof window === 'undefined' || typeof document === 'undefined') {
+    throw new Error('无浏览器环境');
+  }
 
   if (ds === 2 || ds === 3) {
     fundDebugLog('fetchFundValuationBySource sina', { code: c, dataSource: ds });
@@ -1128,20 +1257,6 @@ export async function fetchFundValuationBySource(code, dataSource = 1) {
     const safeResolve = settleOnce(resolve);
     const safeReject = settleOnce(reject);
 
-    const trySupabaseFallback = async (originalError) => {
-      fundDebugLog('fetchFundValuationBySource try supabase fallback', { code: c });
-      const qdii = await fetchQdiiValuationFromSupabase(c);
-      if (qdii) {
-        safeResolve({
-          code: c,
-          ...qdii,
-          gsz: null // 由 fetchFundData 等调用方配合 dwjz 计算
-        });
-      } else {
-        safeReject(originalError || new Error('gz failed and no qdii fallback'));
-      }
-    };
-
     const scriptGz = document.createElement('script');
     scriptGz.src = gzUrl;
     scriptGz.async = true;
@@ -1159,9 +1274,9 @@ export async function fetchFundValuationBySource(code, dataSource = 1) {
     };
 
     const onTimeout = () => {
-      fundDebugLog('fetchFundValuationBySource gz timeout', { code: c, timeoutMs: 8000 });
+      fundDebugLog('fetchFundValuationBySource gz timeout', { code: c, timeoutMs: 5000 });
       cleanupScript();
-      trySupabaseFallback(new Error('gz timeout'));
+      safeReject(new Error('gz timeout'));
     };
 
     const timer = setTimeout(onTimeout, 5000);
@@ -1174,7 +1289,7 @@ export async function fetchFundValuationBySource(code, dataSource = 1) {
         cleanupScript();
 
         if (!json || !isObject(json)) {
-          trySupabaseFallback(new Error('invalid json'));
+          safeReject(new Error('invalid json'));
           return;
         }
 
@@ -1190,14 +1305,14 @@ export async function fetchFundValuationBySource(code, dataSource = 1) {
       },
       onError: (e) => {
         cleanupScript();
-        trySupabaseFallback(e || new Error('gz error callback'));
+        safeReject(e || new Error('gz error callback'));
       }
     });
 
     scriptGz.onerror = () => {
       fundDebugLog('fetchFundValuationBySource gz script error', { code: c, url: gzUrl });
       cleanupScript();
-      trySupabaseFallback(new Error('gz script error'));
+      safeReject(new Error('gz script error'));
     };
 
     document.body.appendChild(scriptGz);
@@ -1292,16 +1407,7 @@ export const fetchFundData = async (c, overrideDataSource) => {
   });
 
   // 2. 发起估值请求
-  // 对于已知 valuationSource 为 supabase_qdii 的基金（dataSource=1），直接走 Supabase 查询，
-  // 避免 fundgz JSONP 对 QDII 基金无响应导致等待超时
-  const gzPromise =
-    storedValuationSource === 'supabase_qdii' && normalizeValuationDataSource(dataSource) === 1
-      ? fetchQdiiValuationFromSupabase(code).then((qdii) => {
-          if (qdii) return { code, ...qdii, gsz: null };
-          // Supabase 无数据时回退到常规流程
-          return fetchFundValuationBySource(code, dataSource);
-        })
-      : fetchFundValuationBySource(code, dataSource);
+  const gzPromise = fetchFundValuationBySource(code, dataSource);
 
   // 3. 编排并合并数据
   return new Promise(async (resolve, reject) => {
@@ -2083,8 +2189,10 @@ export async function fetchFundPeriodReturns(fundCode, { cacheTime = 60 * 60 * 1
   }
 }
 
-export const fetchFundHistory = async (code, range = '1m') => {
+export const fetchFundHistory = async (code, range = '1m', options = {}) => {
   if (typeof window === 'undefined') return [];
+  const { netValueType = 'unit' } = options;
+  const useAccumulatedNetValue = netValueType === 'accumulated';
 
   const end = nowInTz();
   let start = end.clone();
@@ -2112,11 +2220,15 @@ export const fetchFundHistory = async (code, range = '1m') => {
       start = start.subtract(1, 'month');
   }
 
-  // 业绩走势统一走 pingzhongdata.Data_netWorthTrend，
+  // 业绩走势默认走 pingzhongdata.Data_netWorthTrend；需要累计净值展示时走 Data_ACWorthTrend。
   // 同时附带 Data_grandTotal（若存在，格式为 [{ name, data: [[ts, val], ...] }, ...]）
   try {
     const pz = await fetchFundPingzhongdata(code);
-    const trend = pz?.Data_netWorthTrend;
+    const unitTrend = pz?.Data_netWorthTrend;
+    const accumulatedTrend = pz?.Data_ACWorthTrend;
+    const hasAccumulatedTrend = isArray(accumulatedTrend) && accumulatedTrend.length > 0;
+    const trend = useAccumulatedNetValue && hasAccumulatedTrend ? accumulatedTrend : unitTrend;
+    const actualNetValueType = useAccumulatedNetValue && hasAccumulatedTrend ? 'accumulated' : 'unit';
     const grandTotal = pz?.Data_grandTotal;
 
     if (isArray(trend) && trend.length) {
@@ -2124,9 +2236,44 @@ export const fetchFundHistory = async (code, range = '1m') => {
       const endMs = end.endOf('day').valueOf();
 
       // 若起始日没有净值，则往前推到最近一日有净值的数据作为有效起始
+      const normalizeTrendPoint = (d) => {
+        if (isArray(d)) {
+          const ts = Number(d[0]);
+          const value = Number(d[1]);
+          if (!Number.isFinite(ts) || !Number.isFinite(value)) return null;
+          return { x: ts, y: value, equityReturn: null };
+        }
+        if (d && isNumber(d.x) && Number.isFinite(Number(d.y))) return d;
+        return null;
+      };
+      const buildValueByDate = (list) => {
+        const out = new Map();
+        if (!isArray(list)) return out;
+        list
+          .map(normalizeTrendPoint)
+          .filter(Boolean)
+          .forEach((d) => {
+            const date = dayjs(d.x).tz(TZ).format('YYYY-MM-DD');
+            out.set(date, Number(d.y));
+          });
+        return out;
+      };
       const validTrend = trend
-        .filter((d) => d && isNumber(d.x) && Number.isFinite(Number(d.y)) && d.x <= endMs)
+        .map(normalizeTrendPoint)
+        .filter((d) => d && d.x <= endMs)
         .sort((a, b) => a.x - b.x);
+      const unitValueByDate = buildValueByDate(unitTrend);
+      const accumulatedValueByDate = buildValueByDate(accumulatedTrend);
+      const unitReturnByDate = new Map();
+      if (useAccumulatedNetValue && isArray(unitTrend)) {
+        unitTrend
+          .filter((d) => d && isNumber(d.x))
+          .forEach((d) => {
+            const date = dayjs(d.x).tz(TZ).format('YYYY-MM-DD');
+            const equityReturn = isNumber(d.equityReturn) ? Number(d.equityReturn) : null;
+            if (equityReturn != null) unitReturnByDate.set(date, equityReturn);
+          });
+      }
       const startDayEndMs = startMs + 24 * 60 * 60 * 1000 - 1;
       const hasPointOnStartDay = validTrend.some((d) => d.x >= startMs && d.x <= startDayEndMs);
       let effectiveStartMs = startMs;
@@ -2139,10 +2286,22 @@ export const fetchFundHistory = async (code, range = '1m') => {
         .filter((d) => d.x >= effectiveStartMs && d.x <= endMs)
         .map((d) => {
           const value = Number(d.y);
-          const equityReturn = isNumber(d.equityReturn) ? Number(d.equityReturn) : null;
           const date = dayjs(d.x).tz(TZ).format('YYYY-MM-DD');
-          return { date, value, equityReturn };
+          const equityReturn = useAccumulatedNetValue
+            ? (unitReturnByDate.get(date) ?? null)
+            : isNumber(d.equityReturn)
+              ? Number(d.equityReturn)
+              : null;
+          return {
+            date,
+            value,
+            unitNetValue: unitValueByDate.get(date) ?? (actualNetValueType === 'unit' ? value : null),
+            accumulatedNetValue:
+              accumulatedValueByDate.get(date) ?? (actualNetValueType === 'accumulated' ? value : null),
+            equityReturn
+          };
         });
+      out.netValueType = actualNetValueType;
 
       // 解析 Data_grandTotal 为多条对比曲线，使用同一有效起始日
       if (isArray(grandTotal) && grandTotal.length) {

@@ -92,3 +92,7 @@ fabric.properties
 # CLI
 cli/
 .agents/
+/CLI.md
+/.mcp.json
+/.codex/
+/jgb-cli/

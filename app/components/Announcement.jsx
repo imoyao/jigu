@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { storageStore } from '../stores';
 
-const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.2.1';
+const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.3.2';
 
 export default function Announcement() {
   const [isVisible, setIsVisible] = useState(false);
@@ -109,10 +109,10 @@ export default function Announcement() {
                 paddingRight: '4px'
               }}
             >
-              <p>v2.2.1 版本更新内容：</p>
-              <p>1. 行情页面分页数量调整为 5 页。</p>
-              <p>2. 盘中支持显示昨日最准及昨日误差（限免）。</p>
-              <p>3. 新增估值走势（限免）。</p>
+              <p>v2.3.2 版本更新内容：</p>
+              <p>1. 新增数据源4（部分QDII）。</p>
+              <p>2. 新增表格分页。</p>
+              <p>3. 修复云端拉取排序个性化数据未生效问题。</p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
               <button

@@ -7,6 +7,7 @@ import SummaryTabContent from './components/SummaryTabContent';
 import FundListView from './components/FundListView';
 import NavLayout from './components/NavLayout';
 import { motion, AnimatePresence } from 'framer-motion';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import Image from 'next/image';
 
 import { createAvatar } from '@dicebear/core';
@@ -20,7 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { toast as sonnerToast } from 'sonner';
 
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from '@/components/ui/empty';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import Announcement from './components/Announcement';
 import EmptyStateCard from './components/EmptyStateCard';
 import FundCard from './components/FundCard';
@@ -67,6 +68,7 @@ import {
   setAuthUser,
   useStorageStore,
   storageStore,
+  normalizePendingTrades,
   useModalStore,
   useSettingsStore
 } from './stores';
@@ -98,14 +100,13 @@ import {
   sanitizeTagRowForStorage,
   serializeTagRecordsForCompare,
   cloneHoldingDeep,
-  seedGroupHoldingsFromGlobal,
   migrateDcaPlansToScoped,
   isNavUpdated
 } from './lib/fundHelpers';
 
 import { dedupeByCode, normalizeCode, cleanCodeArray } from './lib/normalize';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { formatMoney } from '@/lib/utils';
+import { cn, formatMoney } from '@/lib/utils';
 
 export default function HomePage() {
   const {
@@ -215,6 +216,10 @@ export default function HomePage() {
     setDynamicStylePc,
     dynamicStyleMobile,
     setDynamicStyleMobile,
+    showGroupDropdownPc,
+    setShowGroupDropdownPc,
+    showGroupDropdownMobile,
+    setShowGroupDropdownMobile,
     isGroupSummarySticky,
     setIsGroupSummarySticky,
     syncFromCustomSettings
@@ -305,6 +310,7 @@ export default function HomePage() {
   const [todayPercentModes, setTodayPercentModes] = useState({}); // { [code]: boolean }
 
   const tabsRef = useRef(null);
+  const scrollAreaRef = useRef(null);
 
   // ---- Modal store setter compatibility wrappers ----
   const _ms = useModalStore.setState;
@@ -360,6 +366,8 @@ export default function HomePage() {
   const todayStr = formatDate();
 
   const isMobile = useIsMobile();
+  const showGroupDropdown = isMobile ? showGroupDropdownMobile : showGroupDropdownPc;
+  const isGroupDropdownTabActive = currentTab === 'fav' || groups.some((g) => g.id === currentTab);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -1422,12 +1430,12 @@ export default function HomePage() {
 
   // 自动滚动选中 Tab 到可视区域
   useEffect(() => {
-    if (!tabsRef.current) return;
+    if (!scrollAreaRef.current) return;
     if (currentTab === 'all' || currentTab === SUMMARY_TAB_ID) {
-      tabsRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+      scrollAreaRef.current.scrollTo({ left: 0, behavior: 'smooth' });
       return;
     }
-    const activeTab = tabsRef.current.querySelector('.tab.active');
+    const activeTab = tabsRef.current?.querySelector('.tab.active');
     if (activeTab) {
       activeTab.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
     }
@@ -1437,6 +1445,7 @@ export default function HomePage() {
   const dragStateRef = useRef({ isDragging: false, startX: 0, startY: 0, hasDragged: false });
   const [canLeft, setCanLeft] = useState(false);
   const [canRight, setCanRight] = useState(false);
+  const [hasTabOverflow, setHasTabOverflow] = useState(false);
 
   const handleSaveHolding = (code, data, groupIdOverride) => {
     const gid = getScopedGroupId(
@@ -1577,7 +1586,10 @@ export default function HomePage() {
     if (isProcessingPendingRef.current) return;
     isProcessingPendingRef.current = true;
     try {
-      const currentPending = useStorageStore.getState().pendingTrades;
+      const currentPending = normalizePendingTrades(useStorageStore.getState().pendingTrades);
+      if (currentPending.length !== (useStorageStore.getState().pendingTrades || []).length) {
+        storageStore.setItem('pendingTrades', JSON.stringify(currentPending));
+      }
       if (currentPending.length === 0) return;
 
       let stateChanged = false;
@@ -1591,6 +1603,7 @@ export default function HomePage() {
       const processedIds = new Set();
       const newTransactions = [];
 
+      const handledIds = new Set();
       const readCurrent = (fundCode, tradeGid) => {
         if (!tradeGid) {
           return tempHoldings[fundCode] || { share: 0, cost: 0 };
@@ -1609,6 +1622,9 @@ export default function HomePage() {
       };
 
       for (const trade of currentPending) {
+        if (trade?.id && handledIds.has(trade.id)) continue;
+        if (trade?.id) handledIds.add(trade.id);
+
         const tradeGid = trade.groupId || null;
         let queryDate = trade.date;
         if (trade.isAfter3pm) {
@@ -1684,37 +1700,39 @@ export default function HomePage() {
       }
 
       if (stateChanged) {
-        setHoldings(tempHoldings);
-        setGroupHoldings(tempGroupHoldings);
-
-        setPendingTrades((prev) => {
-          const next = prev.filter((t) => !processedIds.has(t.id));
-          return next;
+        // 构建最终的 transactions 状态
+        const prevTransactions = useStorageStore.getState().transactions;
+        const nextTransactions = { ...prevTransactions };
+        newTransactions.forEach((tx) => {
+          const current = nextTransactions[tx.fundCode] || [];
+          // 避免重复添加 (虽然 id 应该唯一)
+          if (!current.some((t) => t.id === tx.id)) {
+            const row = {
+              id: tx.id,
+              type: tx.type,
+              share: tx.share,
+              amount: tx.amount,
+              price: tx.price,
+              date: tx.date,
+              isAfter3pm: tx.isAfter3pm,
+              isDca: tx.isDca,
+              timestamp: tx.timestamp
+            };
+            if (tx.groupId) row.groupId = tx.groupId;
+            nextTransactions[tx.fundCode] = [row, ...current].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          }
         });
 
-        setTransactions((prev) => {
-          const nextState = { ...prev };
-          newTransactions.forEach((tx) => {
-            const current = nextState[tx.fundCode] || [];
-            // 避免重复添加 (虽然 id 应该唯一)
-            if (!current.some((t) => t.id === tx.id)) {
-              const row = {
-                id: tx.id,
-                type: tx.type,
-                share: tx.share,
-                amount: tx.amount,
-                price: tx.price,
-                date: tx.date,
-                isAfter3pm: tx.isAfter3pm,
-                isDca: tx.isDca,
-                timestamp: tx.timestamp
-              };
-              if (tx.groupId) row.groupId = tx.groupId;
-              nextState[tx.fundCode] = [row, ...current].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-            }
-          });
-          return nextState;
-        });
+        // 构建最终的 pendingTrades 状态
+        const prevPending = normalizePendingTrades(useStorageStore.getState().pendingTrades);
+        const nextPending = prevPending.filter((t) => !processedIds.has(t.id));
+
+        // 通过 storageStore.setItem 更新（内部会同步更新 state + localStorage + 触发云端同步）
+        // 由于在同一同步代码块中，React 18 会自动批量处理，只触发一次 re-render
+        storageStore.setItem('holdings', JSON.stringify(tempHoldings));
+        storageStore.setItem('groupHoldings', JSON.stringify(tempGroupHoldings));
+        storageStore.setItem('pendingTrades', JSON.stringify(nextPending));
+        storageStore.setItem('transactions', JSON.stringify(nextTransactions));
 
         showToast(`已处理 ${processedIds.size} 笔待定交易`, 'success');
       }
@@ -1859,8 +1877,7 @@ export default function HomePage() {
         ...(tradeGid ? { groupId: tradeGid } : {})
       };
 
-      const next = [...pendingTrades, pending];
-      setPendingTrades(next);
+      setPendingTrades((prev) => [...(prev || []), pending]);
 
       // 如果该基金没有持仓数据，初始化持仓金额为 0
       const tabH = tradeGid ? groupHoldings[tradeGid] || {} : holdings;
@@ -1929,7 +1946,7 @@ export default function HomePage() {
   };
 
   const handleMouseDown = (e) => {
-    if (!tabsRef.current) return;
+    if (!scrollAreaRef.current) return;
     dragStateRef.current = { isDragging: true, startX: e.clientX, startY: e.clientY, hasDragged: false };
   };
 
@@ -1939,19 +1956,29 @@ export default function HomePage() {
 
   const handleMouseMove = (e) => {
     const ds = dragStateRef.current;
-    if (!ds.isDragging || !tabsRef.current) return;
+    if (!ds.isDragging || !scrollAreaRef.current) return;
     const dx = e.clientX - ds.startX;
     const dy = e.clientY - ds.startY;
     if (!ds.hasDragged && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
     ds.hasDragged = true;
     e.preventDefault();
-    tabsRef.current.scrollLeft -= e.movementX;
+    scrollAreaRef.current.scrollLeft -= e.movementX;
   };
 
   const handleWheel = (e) => {
-    if (!tabsRef.current) return;
+    if (!scrollAreaRef.current) return;
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    tabsRef.current.scrollLeft += delta;
+    scrollAreaRef.current.scrollLeft += delta;
+  };
+
+  const scrollTabsLeftBtn = () => {
+    if (!scrollAreaRef.current) return;
+    scrollAreaRef.current.scrollBy({ left: -200, behavior: 'smooth' });
+  };
+
+  const scrollTabsRightBtn = () => {
+    if (!scrollAreaRef.current) return;
+    scrollAreaRef.current.scrollBy({ left: 200, behavior: 'smooth' });
   };
 
   const handleTabClick = (tabId) => {
@@ -1960,10 +1987,12 @@ export default function HomePage() {
   };
 
   const updateTabOverflow = () => {
-    if (!tabsRef.current) return;
-    const el = tabsRef.current;
-    setCanLeft(el.scrollLeft > 0);
-    setCanRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+    const area = scrollAreaRef.current;
+    if (!area) return;
+    const overflowing = area.scrollWidth > area.clientWidth + 1;
+    setHasTabOverflow(overflowing);
+    setCanLeft(area.scrollLeft > 0);
+    setCanRight(area.scrollLeft < area.scrollWidth - area.clientWidth - 1);
   };
 
   useEffect(() => {
@@ -1977,9 +2006,31 @@ export default function HomePage() {
       });
     };
     window.addEventListener('resize', onResize);
+
+    // 额外监听 tabs 容器及内容的尺寸变化（如字体加载、动画结束等）
+    let resizeObserver = null;
+    let mutationObserver = null;
+    const area = scrollAreaRef.current;
+
+    if (area) {
+      resizeObserver = new ResizeObserver(onResize);
+      resizeObserver.observe(area);
+
+      // 监听内部 DOM 的增删或 style 变化（framer-motion 动画会不断改变 style）
+      mutationObserver = new MutationObserver(onResize);
+      mutationObserver.observe(area, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class']
+      });
+    }
+
     return () => {
       window.removeEventListener('resize', onResize);
       if (rafId) cancelAnimationFrame(rafId);
+      if (resizeObserver) resizeObserver.disconnect();
+      if (mutationObserver) mutationObserver.disconnect();
     };
   }, [groups, funds.length, favorites.size]);
 
@@ -2029,7 +2080,8 @@ export default function HomePage() {
     setValuationSeries,
     showToast,
     normalizeCode,
-    dedupeByCode
+    dedupeByCode,
+    setFundTagRecords
   });
 
   const refreshAllRef = useRef(null);
@@ -2470,26 +2522,25 @@ export default function HomePage() {
         return;
       }
 
-      setDcaPlans(nextPlans);
+      // 计算去重后的新 pending 列表
+      const prevPending = normalizePendingTrades(useStorageStore.getState().pendingTrades);
+      const existingIds = new Set(prevPending.map((t) => t.id));
+      const unique = newPending.filter((t) => !existingIds.has(t.id));
 
-      const pendingSnapshot = useStorageStore.getState().pendingTrades;
-      const snapshotIds = new Set((isArray(pendingSnapshot) ? pendingSnapshot : []).map((t) => t.id));
-      const uniqueNewPending = newPending.filter((t) => !snapshotIds.has(t.id));
+      // 批量更新 dcaPlans 和 pendingTrades
+      // 通过 storageStore.setItem 更新（内部会同步更新 state + localStorage + 触发云端同步）
+      // 由于在同一同步代码块中，React 18 会自动批量处理，只触发一次 re-render
+      const nextPending = normalizePendingTrades(unique.length > 0 ? [...prevPending, ...unique] : prevPending);
+      storageStore.setItem('dcaPlans', JSON.stringify(nextPlans));
+      storageStore.setItem('pendingTrades', JSON.stringify(nextPending));
 
-      setPendingTrades((prev) => {
-        const existingIds = new Set((prev || []).map((t) => t.id));
-        const unique = newPending.filter((t) => !existingIds.has(t.id));
-        if (unique.length === 0) return prev;
-        return [...(prev || []), ...unique];
-      });
-
-      if (uniqueNewPending.length > 0) {
-        showToast(`已生成 ${uniqueNewPending.length} 笔定投买入`, 'success');
+      if (unique.length > 0) {
+        showToast(`已生成 ${unique.length} 笔定投买入`, 'success');
       }
     } finally {
       isSchedulingDcaRef.current = false;
     }
-  }, [isTradingDay, setDcaPlans, setPendingTrades]);
+  }, [isTradingDay, setDcaPlans]);
 
   const { refreshing, refreshCycleStartRef, manualRefresh, refreshAll } = useRefreshManager({
     scheduleDcaTrades,
@@ -2664,10 +2715,6 @@ export default function HomePage() {
           setCurrentTab('all');
         }
         // 加载持仓数据
-        const seedGh = seedGroupHoldingsFromGlobal(holdings, isArray(groups) ? groups : [], groupHoldings);
-        if (seedGh.changed) {
-          setGroupHoldings(seedGh.next);
-        }
         const migratedDca = migrateDcaPlansToScoped(isPlainObject(dcaPlans) ? dcaPlans : {});
         if (JSON.stringify(migratedDca) !== JSON.stringify(dcaPlans)) {
           setDcaPlans(migratedDca);
@@ -2692,16 +2739,6 @@ export default function HomePage() {
     if (!hasLocalTabInitRef.current) return;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [currentTab]);
-
-  // 全局持仓或分组成员变化时，按分组幂等补全子账本（不覆盖已有分组持仓）
-  useEffect(() => {
-    if (!hasLocalTabInitRef.current) return;
-    setGroupHoldings((prev) => {
-      const { next, changed } = seedGroupHoldingsFromGlobal(holdings, groups, prev);
-      if (!changed) return prev;
-      return next;
-    });
-  }, [holdings, groups]);
 
   // 记录用户当前选择的分组（仅本地存储，不同步云端）
   useEffect(() => {
@@ -3342,24 +3379,6 @@ export default function HomePage() {
       return next;
     });
 
-    // 同步删除该基金的每日收益数据
-    try {
-      setFundDailyEarnings((prev) => {
-        if (!isPlainObject(prev)) return prev;
-        let changed = false;
-        const next = { ...prev };
-        Object.keys(next).forEach((scopeKey) => {
-          const bucket = next[scopeKey];
-          if (!isPlainObject(bucket) || !(removeCode in bucket)) return;
-          const nb = { ...bucket };
-          delete nb[removeCode];
-          next[scopeKey] = nb;
-          changed = true;
-        });
-        return changed ? next : prev;
-      });
-    } catch {}
-
     // 同步删除该基金的定投计划（所有 scope）
     setDcaPlans((prev) => {
       const scoped = migrateDcaPlansToScoped(prev);
@@ -3614,7 +3633,9 @@ export default function HomePage() {
     showMarketIndexOverride,
     showGroupFundSearchOverride,
     isMobileOverride,
-    dynamicStyleOverride
+    dynamicStyleOverride,
+    containerWidthOverride,
+    showGroupDropdownOverride
   ) => {
     e?.preventDefault?.();
     const seconds = secondsOverride ?? tempSeconds;
@@ -3647,22 +3668,31 @@ export default function HomePage() {
     if (targetIsMobile) setDynamicStyleMobile(nextDynamicStyle);
     else setDynamicStylePc(nextDynamicStyle);
 
+    const nextShowGroupDropdown = isBoolean(showGroupDropdownOverride)
+      ? showGroupDropdownOverride
+      : targetIsMobile
+        ? showGroupDropdownMobile
+        : showGroupDropdownPc;
+    if (targetIsMobile) setShowGroupDropdownMobile(nextShowGroupDropdown);
+    else setShowGroupDropdownPc(nextShowGroupDropdown);
+
     // 在移动端不裁剪也不修改 pcContainerWidth，直接保留原值
-    let w = Number(containerWidth) || 1200;
+    let w = Number(containerWidthOverride ?? containerWidth) || 1200;
     if (!targetIsMobile) {
-      w = Math.min(window.innerWidth, Math.max(600, w));
+      w = Math.min(Math.max(window.innerWidth, 2000), Math.max(600, w));
       setContainerWidth(w);
     }
 
     try {
-      const parsed = customSettings || {};
+      const parsed = useStorageStore.getState().customSettings || {};
       if (targetIsMobile) {
         // 仅更新当前运行端对应的开关键，不覆盖 PC 端宽度
         setCustomSettings({
           ...parsed,
           showMarketIndexMobile: nextShowMarketIndex,
           showGroupFundSearchMobile: nextShowGroupFundSearch,
-          dynamicStyleMobile: nextDynamicStyle
+          dynamicStyleMobile: nextDynamicStyle,
+          showGroupDropdownMobile: nextShowGroupDropdown
         });
       } else {
         setCustomSettings({
@@ -3670,7 +3700,8 @@ export default function HomePage() {
           pcContainerWidth: w,
           showMarketIndexPc: nextShowMarketIndex,
           showGroupFundSearchPc: nextShowGroupFundSearch,
-          dynamicStylePc: nextDynamicStyle
+          dynamicStylePc: nextDynamicStyle,
+          showGroupDropdownPc: nextShowGroupDropdown
         });
       }
     } catch {}
@@ -3680,7 +3711,7 @@ export default function HomePage() {
   const handleResetContainerWidth = () => {
     setContainerWidth(1200);
     try {
-      const parsed = customSettings || {};
+      const parsed = useStorageStore.getState().customSettings || {};
       setCustomSettings({ ...parsed, pcContainerWidth: 1200 });
     } catch {}
   };
@@ -3943,7 +3974,9 @@ export default function HomePage() {
               }
             }
             if (isNumber(mergedSettings.pcContainerWidth) && Number.isFinite(mergedSettings.pcContainerWidth)) {
-              const maxWidth = window.matchMedia('(max-width: 640px)').matches ? 99999 : window.innerWidth;
+              const maxWidth = window.matchMedia('(max-width: 640px)').matches
+                ? 99999
+                : Math.max(window.innerWidth, 2000);
               setContainerWidth(Math.min(maxWidth, Math.max(600, mergedSettings.pcContainerWidth)));
             }
             if (isBoolean(mergedSettings.showMarketIndexPc)) setShowMarketIndexPc(mergedSettings.showMarketIndexPc);
@@ -4166,7 +4199,7 @@ export default function HomePage() {
   }, []);
 
   const handleDataSourceSelect = useCallback(
-    (fundCode, sourceId) => {
+    (fundCode, sourceId, autoSource) => {
       setFunds((prev) => {
         const next = [...prev];
         const idx = next.findIndex((f) => f.code === fundCode);
@@ -4174,6 +4207,7 @@ export default function HomePage() {
           next[idx] = {
             ...next[idx],
             dataSource: sourceId,
+            autoSource: !!autoSource,
             gsz: null,
             gszzl: null,
             gztime: null,
@@ -4342,7 +4376,7 @@ export default function HomePage() {
     handleRetryOcr: () => handleRetryOcr?.(),
     handleFilesDrop: (e) => handleFilesDrop?.(e),
     toggleScannedCode: (code) => toggleScannedCode?.(code),
-    confirmScanImport: (targetGroupId, expandAfterAdd) => confirmScanImport?.(targetGroupId, expandAfterAdd),
+    confirmScanImport: (...args) => confirmScanImport?.(...args),
     // 辅助函数
     getScopedHolding: (code, groupIdOverride) => getScopedHolding?.(code, groupIdOverride),
     getScopedGroupId: (groupIdOverride) => getScopedGroupId?.(groupIdOverride),
@@ -4384,6 +4418,8 @@ export default function HomePage() {
     showGroupFundSearchMobile,
     dynamicStylePc,
     dynamicStyleMobile,
+    showGroupDropdownPc,
+    showGroupDropdownMobile,
     scanProgress: scanProgress ?? { stage: 'ocr', current: 0, total: 0 },
     scanImportProgress: scanImportProgress ?? { current: 0, total: 0, success: 0, failed: 0 },
     // Refs
@@ -4620,7 +4656,7 @@ export default function HomePage() {
                   className="filter-bar"
                   style={{
                     top: `calc(${navbarHeight}px + var(--market-index-height, 0px))`,
-                    marginTop: 0,
+                    marginTop: !shouldShowMarketIndex ? navbarHeight : 0,
                     marginBottom: 8,
                     display: 'flex',
                     justifyContent: 'space-between',
@@ -4630,10 +4666,54 @@ export default function HomePage() {
                   }}
                 >
                   <div className="tabs-container">
-                    <div className="tabs-scroll-area" data-mask-left={canLeft} data-mask-right={canRight}>
+                    <div
+                      className="tabs-scroll-wrapper"
+                      style={{
+                        position: 'relative',
+                        flex: 1,
+                        minWidth: 0,
+                        paddingLeft: !showGroupDropdown && !isMobile && hasTabOverflow ? 32 : 0,
+                        paddingRight: !showGroupDropdown && !isMobile && hasTabOverflow ? 32 : 0,
+                        transition: 'padding 0.2s ease'
+                      }}
+                    >
+                      <AnimatePresence>
+                        {!showGroupDropdown && !isMobile && hasTabOverflow && (
+                          <>
+                            <motion.button
+                              initial={{ opacity: 0, scale: 0.8, y: '-50%', x: 0 }}
+                              animate={{ opacity: 1, scale: 1, y: '-50%', x: 0 }}
+                              exit={{ opacity: 0, scale: 0.8, y: '-50%', x: 0 }}
+                              whileHover={canLeft ? { scale: 1.1, y: '-50%', x: 0 } : {}}
+                              whileTap={canLeft ? { scale: 0.95, y: '-50%', x: 0 } : {}}
+                              transition={{ duration: 0.15 }}
+                              className={`tabs-scroll-btn left ${!canLeft ? 'opacity-30 cursor-not-allowed' : ''}`}
+                              disabled={!canLeft}
+                              onClick={scrollTabsLeftBtn}
+                            >
+                              <ChevronLeft size={16} />
+                            </motion.button>
+                            <motion.button
+                              initial={{ opacity: 0, scale: 0.8, y: '-50%', x: 0 }}
+                              animate={{ opacity: 1, scale: 1, y: '-50%', x: 0 }}
+                              exit={{ opacity: 0, scale: 0.8, y: '-50%', x: 0 }}
+                              whileHover={canRight ? { scale: 1.1, y: '-50%', x: 0 } : {}}
+                              whileTap={canRight ? { scale: 0.95, y: '-50%', x: 0 } : {}}
+                              transition={{ duration: 0.15 }}
+                              className={`tabs-scroll-btn right ${!canRight ? 'opacity-30 cursor-not-allowed' : ''}`}
+                              disabled={!canRight}
+                              onClick={scrollTabsRightBtn}
+                            >
+                              <ChevronRight size={16} />
+                            </motion.button>
+                          </>
+                        )}
+                      </AnimatePresence>
                       <div
-                        className="tabs"
-                        ref={tabsRef}
+                        className="tabs-scroll-area"
+                        ref={scrollAreaRef}
+                        data-mask-left={!showGroupDropdown && canLeft}
+                        data-mask-right={!showGroupDropdown && canRight}
                         onMouseDown={handleMouseDown}
                         onMouseLeave={handleMouseLeaveOrUp}
                         onMouseUp={handleMouseLeaveOrUp}
@@ -4641,70 +4721,122 @@ export default function HomePage() {
                         onWheel={handleWheel}
                         onScroll={updateTabOverflow}
                       >
-                        <AnimatePresence mode="popLayout">
-                          {showPortfolioSummaryTab && (
+                        <div className="tabs" ref={tabsRef}>
+                          <AnimatePresence mode="popLayout">
+                            {showPortfolioSummaryTab && (
+                              <motion.button
+                                layout
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.8 }}
+                                key="portfolio-summary"
+                                className={`tab ${currentTab === SUMMARY_TAB_ID ? 'active' : ''}`}
+                                onClick={() => handleTabClick(SUMMARY_TAB_ID)}
+                                transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                              >
+                                汇总
+                              </motion.button>
+                            )}
                             <motion.button
                               layout
                               initial={{ opacity: 0, scale: 0.8 }}
                               animate={{ opacity: 1, scale: 1 }}
                               exit={{ opacity: 0, scale: 0.8 }}
-                              key="portfolio-summary"
-                              className={`tab ${currentTab === SUMMARY_TAB_ID ? 'active' : ''}`}
-                              onClick={() => handleTabClick(SUMMARY_TAB_ID)}
+                              key="all"
+                              className={`tab ${currentTab === 'all' ? 'active' : ''}`}
+                              onClick={() => handleTabClick('all')}
                               transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
                             >
-                              汇总
+                              全部 ({funds.length})
                             </motion.button>
-                          )}
-                          <motion.button
-                            layout
-                            initial={{ opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.8 }}
-                            key="all"
-                            className={`tab ${currentTab === 'all' ? 'active' : ''}`}
-                            onClick={() => handleTabClick('all')}
-                            transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                          >
-                            全部 ({funds.length})
-                          </motion.button>
-                          <motion.button
-                            layout
-                            initial={{ opacity: 0, scale: 0.8 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.8 }}
-                            key="fav"
-                            className={`tab ${currentTab === 'fav' ? 'active' : ''}`}
-                            onClick={() => handleTabClick('fav')}
-                            transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                          >
-                            自选 ({favorites.size})
-                          </motion.button>
-                          {groups.map((g) => (
-                            <motion.button
-                              layout
-                              initial={{ opacity: 0, scale: 0.8 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              exit={{ opacity: 0, scale: 0.8 }}
-                              key={g.id}
-                              className={`tab ${currentTab === g.id ? 'active' : ''}`}
-                              onClick={() => handleTabClick(g.id)}
-                              transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                            >
-                              {g.name} ({g.codes.length})
-                            </motion.button>
-                          ))}
-                        </AnimatePresence>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button className="icon-button add-group-btn" onClick={() => setGroupModalOpen(true)}>
-                              <PlusIcon width="16" height="16" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>新增分组</p>
-                          </TooltipContent>
-                        </Tooltip>
+                            {!showGroupDropdown && (
+                              <motion.button
+                                layout
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.8 }}
+                                key="fav"
+                                className={`tab ${currentTab === 'fav' ? 'active' : ''}`}
+                                onClick={() => handleTabClick('fav')}
+                                transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                              >
+                                自选 ({favorites.size})
+                              </motion.button>
+                            )}
+                            {!showGroupDropdown &&
+                              groups.map((g) => (
+                                <motion.button
+                                  layout
+                                  initial={{ opacity: 0, scale: 0.8 }}
+                                  animate={{ opacity: 1, scale: 1 }}
+                                  exit={{ opacity: 0, scale: 0.8 }}
+                                  key={g.id}
+                                  className={`tab ${currentTab === g.id ? 'active' : ''}`}
+                                  onClick={() => handleTabClick(g.id)}
+                                  transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                                >
+                                  {g.name} ({g.codes.length})
+                                </motion.button>
+                              ))}
+                            {showGroupDropdown && (
+                              <div
+                                key="group-dropdown"
+                                style={{ minWidth: isMobile ? 170 : 210, maxWidth: isMobile ? 230 : 300 }}
+                              >
+                                <Select
+                                  value={isGroupDropdownTabActive ? currentTab : ''}
+                                  onValueChange={(value) => handleTabClick(value)}
+                                >
+                                  <SelectTrigger
+                                    className={cn(
+                                      'h-4 py-0 text-xs shadow-none',
+                                      isGroupDropdownTabActive &&
+                                        'border-primary/70 text-primary ring-1 ring-primary/25'
+                                    )}
+                                    style={{
+                                      background: isGroupDropdownTabActive
+                                        ? 'color-mix(in srgb, var(--primary) 12%, var(--card-bg))'
+                                        : 'var(--card-bg)',
+                                      boxShadow: isGroupDropdownTabActive
+                                        ? '0 0 0 1px rgba(255, 255, 255, 0.05), 0 6px 18px rgba(34, 211, 238, 0.12)'
+                                        : undefined,
+                                      height: 32
+                                    }}
+                                    aria-label="选择分组"
+                                  >
+                                    <SelectValue placeholder="选择分组" />
+                                  </SelectTrigger>
+                                  <SelectContent
+                                    position="popper"
+                                    align="start"
+                                    style={{
+                                      width: isMobile ? 230 : 300
+                                    }}
+                                  >
+                                    <SelectGroup>
+                                      <SelectItem value="fav">自选 ({favorites.size})</SelectItem>
+                                      {groups.map((g) => (
+                                        <SelectItem key={g.id} value={g.id}>
+                                          {g.name} ({g.codes.length})
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )}
+                          </AnimatePresence>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button className="icon-button add-group-btn" onClick={() => setGroupModalOpen(true)}>
+                                <PlusIcon width="16" height="16" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>新增分组</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
                       </div>
                     </div>
                     {groups.length > 0 && (

@@ -12,20 +12,31 @@ import {
   useState,
   memo
 } from 'react';
-import { isArray, isFunction, isObject, isString, throttle } from 'lodash';
+import { isArray, isFunction, isObject, isString, throttle, debounce } from 'lodash';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useModalStore } from '../stores';
 import { useWindowVirtualizer } from '@tanstack/react-virtual';
-import { flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable } from '@tanstack/react-table';
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { Plus, Sparkles } from 'lucide-react';
 import ConfirmModal from './ConfirmModal';
 import PcTableSettingModal from './PcTableSettingModal';
 import FundCard from './FundCard';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Input } from '@/components/ui/input';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious
+} from '@/components/ui/pagination';
 import {
   DragIcon,
   SettingsIcon,
@@ -50,13 +61,13 @@ import MoveGroupModal from './MoveGroupModal';
 import { Badge } from '@/components/ui/badge';
 import { getTagThemeBadgeProps } from '@/app/components/AddTagDialog';
 import { cn } from '@/lib/utils';
+import DataSourceAccuracyBadge from './DataSourceAccuracyBadge';
+import { useDataSourceAccuracyLabels } from '@/app/hooks/useDataSourceAccuracyLabels';
 
 const EditModeContext = createContext({ isEditMode: false, selectedCodes: null, toggleSelected: null });
 
-const TAGS_COLUMN_ID = 'tags';
-
 const NON_FROZEN_COLUMN_IDS = [
-  'tags',
+  'dataSource',
   'relatedSector',
   'yesterdayChangePercent',
   'estimateChangePercent',
@@ -81,17 +92,15 @@ const NON_FROZEN_COLUMN_IDS = [
 
 /** 已保存列显示偏好时，新增列默认隐藏；未保存时随「全展示」 */
 const PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set([
-  'tags',
+  'dataSource',
   'holdingCost',
   'costNav',
   'sinceAddedChangePercent',
   'holdingRatio'
 ]);
 
-/** 非冻结列中右对齐的（标签列左对齐） */
-const isPcDataColumnRightAligned = (id) => id !== TAGS_COLUMN_ID && NON_FROZEN_COLUMN_IDS.includes(id);
-
 const COLUMN_HEADERS = {
+  dataSource: '数据源',
   relatedSector: '关联板块',
   period1w: '近1周',
   period1m: '近1月',
@@ -111,8 +120,7 @@ const COLUMN_HEADERS = {
   holdingDays: '持有天数',
   todayProfit: '当日收益',
   yesterdayProfit: '昨日收益',
-  holdingProfit: '持有收益',
-  tags: '基金标签'
+  holdingProfit: '持有收益'
 };
 
 const SortableRowContext = createContext({
@@ -126,26 +134,6 @@ function sortableRowA11yProps(attributes) {
   if (!attributes) return {};
   const { tabIndex: _ignored, ...rest } = attributes;
   return { ...rest, tabIndex: -1 };
-}
-
-function beginDragScrollLock(scrollYRef, rafRef) {
-  scrollYRef.current = window.scrollY;
-  const tick = () => {
-    if (window.scrollY !== scrollYRef.current) {
-      window.scrollTo(0, scrollYRef.current);
-    }
-    rafRef.current = requestAnimationFrame(tick);
-  };
-  if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  rafRef.current = requestAnimationFrame(tick);
-}
-
-function endDragScrollLock(scrollYRef, rafRef) {
-  if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  rafRef.current = null;
-  if (window.scrollY !== scrollYRef.current) {
-    window.scrollTo(0, scrollYRef.current);
-  }
 }
 
 function SortableRow({ row, children, disabled, enableAnimation = true }) {
@@ -269,6 +257,8 @@ const FundNameCell = memo(
     batchRemoveEnabled,
     sortBy,
     onToggleFavoriteRef,
+    onFundTagsClickRef,
+    canEditFundTags,
     fundExtraDataByCode
   }) => {
     const { isEditMode, selectedCodes, toggleSelected } = useContext(EditModeContext);
@@ -277,6 +267,7 @@ const FundNameCell = memo(
     const isUpdated = original.isUpdated;
     const hasDca = original.hasDca;
     const hasPending = original.hasPending;
+    const fundTags = isArray(original.fundTags) ? original.fundTags : [];
     const isFavorites = favorites?.has?.(code);
     const rowContext = useContext(SortableRowContext);
     const showFavoriteButton = !isGroupTab && (currentTab === 'all' || currentTab === 'fav' || !currentTab);
@@ -448,9 +439,77 @@ const FundNameCell = memo(
           {code ? (
             <span className="muted code-text">
               #{code}
-              {hasPending && <span className="pending-indicator">待</span>}
-              {hasDca && <span className="dca-indicator">定</span>}
-              {isUpdated && <span className="updated-indicator">✓</span>}
+              {hasPending && (
+                <Tooltip delayDuration={150}>
+                  <TooltipTrigger asChild>
+                    <span className="pending-indicator">待</span>
+                  </TooltipTrigger>
+                  <TooltipContent>有进行中的交易</TooltipContent>
+                </Tooltip>
+              )}
+              {hasDca && (
+                <Tooltip delayDuration={150}>
+                  <TooltipTrigger asChild>
+                    <span className="dca-indicator">定</span>
+                  </TooltipTrigger>
+                  <TooltipContent>定投中</TooltipContent>
+                </Tooltip>
+              )}
+              {isUpdated && (
+                <Tooltip delayDuration={150}>
+                  <TooltipTrigger asChild>
+                    <span className="updated-indicator">✓</span>
+                  </TooltipTrigger>
+                  <TooltipContent>今日净值已更新</TooltipContent>
+                </Tooltip>
+              )}
+              {fundTags.length > 0 ? (
+                <span className="pc-name-inline-tags">
+                  {fundTags.map((raw, idx) => {
+                    const item =
+                      raw && isObject(raw) && raw.name != null
+                        ? {
+                            name: String(raw.name).trim(),
+                            theme: String(raw.theme ?? 'default').trim() || 'default'
+                          }
+                        : { name: String(raw).trim(), theme: 'default' };
+                    if (!item.name) return null;
+                    const { variant, className: themeCls } = getTagThemeBadgeProps(item.theme);
+                    return (
+                      <Badge
+                        key={`${item.name}-${idx}`}
+                        variant={variant}
+                        className={cn('font-normal text-[11px]', themeCls)}
+                        title={canEditFundTags ? '编辑标签' : undefined}
+                        style={{ cursor: canEditFundTags ? 'pointer' : 'default' }}
+                        onClick={(e) => {
+                          if (onFundTagsClickRef.current) {
+                            e.stopPropagation?.();
+                            onFundTagsClickRef.current(original);
+                          }
+                        }}
+                      >
+                        {item.name}
+                      </Badge>
+                    );
+                  })}
+                </span>
+              ) : canEditFundTags ? (
+                <button
+                  type="button"
+                  className="pc-name-add-tag-button"
+                  title="添加标签"
+                  onClick={(e) => {
+                    e.stopPropagation?.();
+                    onFundTagsClickRef.current?.(original);
+                  }}
+                >
+                  <Badge variant="outline" className="font-normal text-[11px]">
+                    <Plus className="h-3 w-3" />
+                    添加标签
+                  </Badge>
+                </button>
+              ) : null}
             </span>
           ) : null}
         </div>
@@ -523,6 +582,24 @@ const PcFundTable = memo(function PcFundTable({
   const fundDeleteBulkConfirm = useModalStore((s) => s.fundDeleteBulkConfirm);
   const blockDialogClose = !!fundDeleteConfirm || !!fundDeleteBulkConfirm;
 
+  const [pagination, setPagination] = useState(() => {
+    let size = 20;
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = storageStore.getItem('fundTablePageSize');
+        if (stored && typeof stored === 'number' && stored > 0) size = stored;
+      }
+    } catch (e) {}
+    return {
+      pageIndex: 0,
+      pageSize: size
+    };
+  });
+
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, [currentTab, sortBy, sortOrder]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -538,8 +615,6 @@ const PcFundTable = memo(function PcFundTable({
   const handleOpenCardDialog = useCallback((row) => {
     setCardDialogRow(row);
   }, []);
-  const dragScrollYRef = useRef(0);
-  const dragScrollRafRef = useRef(null);
   const isTableDraggingRef = useRef(false);
   const tableContainerRef = useRef(null);
   /** 窗口虚拟列表锚点：用于 scrollMargin（.table-scroll-area 仅横向滚动，纵向为整页滚动） */
@@ -551,15 +626,54 @@ const PcFundTable = memo(function PcFundTable({
   const [portalHorizontal, setPortalHorizontal] = useState({ left: 0, right: 0 });
   const enableRowAnimation = data.length <= 40;
 
+  const autoScrollRafRef = useRef(null);
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRafRef.current) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+  }, []);
+
+  const startAutoScroll = useCallback((direction) => {
+    if (autoScrollRafRef.current) return;
+    const tick = () => {
+      window.scrollBy(0, direction * 12);
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const handleDragMove = useCallback(
+    (event) => {
+      const { active } = event;
+      const rect = active?.rect?.current?.translated;
+      if (!rect) return;
+
+      // effectiveStickyTop is the sticky offset. Header height is ~45px.
+      const headerBottom = effectiveStickyTop + 45;
+      const triggerTop = headerBottom + 40; // 40px trigger zone below the header
+      const triggerBottom = window.innerHeight - 40; // 40px trigger zone above the bottom
+
+      if (rect.top < triggerTop) {
+        startAutoScroll(-1);
+      } else if (rect.bottom > triggerBottom) {
+        startAutoScroll(1);
+      } else {
+        stopAutoScroll();
+      }
+    },
+    [effectiveStickyTop, startAutoScroll, stopAutoScroll]
+  );
+
   const handleDragStart = (event) => {
     isTableDraggingRef.current = true;
-    beginDragScrollLock(dragScrollYRef, dragScrollRafRef);
     setActiveId(event.active.id);
   };
 
   const handleDragCancel = () => {
     isTableDraggingRef.current = false;
-    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
+    stopAutoScroll();
     setActiveId(null);
   };
 
@@ -573,11 +687,14 @@ const PcFundTable = memo(function PcFundTable({
       }
     }
     isTableDraggingRef.current = false;
-    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
+    stopAutoScroll();
     setActiveId(null);
   };
 
-  useEffect(() => () => endDragScrollLock(dragScrollYRef, dragScrollRafRef), []);
+  useEffect(() => {
+    return () => stopAutoScroll();
+  }, [stopAutoScroll]);
+
   const groupKey = currentTab ?? 'all';
   const currentGroupName = useMemo(() => {
     if (groupKey === 'all') return '全部';
@@ -812,11 +929,11 @@ const PcFundTable = memo(function PcFundTable({
     }
     const allVisible = {};
     NON_FROZEN_COLUMN_IDS.forEach((id) => {
-      allVisible[id] = true;
+      allVisible[id] = PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
     });
     return allVisible;
   })();
-  const columnSizing = (() => {
+  const columnSizing = useMemo(() => {
     const s = currentGroupPc?.pcTableColumns;
     if (s && isObject(s)) {
       const out = Object.fromEntries(Object.entries(s).filter(([, v]) => Number.isFinite(v)));
@@ -827,7 +944,7 @@ const PcFundTable = memo(function PcFundTable({
       return out;
     }
     return {};
-  })();
+  }, [currentGroupPc?.pcTableColumns]);
 
   const persistPcGroupConfig = (updates) => {
     if (typeof window === 'undefined') return;
@@ -894,11 +1011,35 @@ const PcFundTable = memo(function PcFundTable({
     const next = isFunction(nextOrUpdater) ? nextOrUpdater(columnVisibility) : nextOrUpdater;
     persistPcGroupConfig({ pcTableColumnVisibility: next });
   };
+
+  const [localColumnSizing, setLocalColumnSizing] = useState(columnSizing);
+
+  useEffect(() => {
+    setLocalColumnSizing(columnSizing);
+  }, [columnSizing]);
+
+  const persistPcGroupConfigRef = useRef(persistPcGroupConfig);
+  persistPcGroupConfigRef.current = persistPcGroupConfig;
+
+  const debouncedPersistColumnSizing = useMemo(
+    () => debounce((sizes) => persistPcGroupConfigRef.current({ pcTableColumns: sizes }), 300),
+    []
+  );
+
+  useEffect(() => {
+    return () => debouncedPersistColumnSizing.cancel();
+  }, [debouncedPersistColumnSizing]);
+
   const setColumnSizing = (nextOrUpdater) => {
-    const next = isFunction(nextOrUpdater) ? nextOrUpdater(columnSizing) : nextOrUpdater;
-    const { actions, ...rest } = next || {};
-    persistPcGroupConfig({ pcTableColumns: rest || {} });
+    setLocalColumnSizing((prev) => {
+      const next = isFunction(nextOrUpdater) ? nextOrUpdater(prev) : nextOrUpdater;
+      const { actions, ...rest } = next || {};
+      const newSizes = rest || {};
+      debouncedPersistColumnSizing(newSizes);
+      return newSizes;
+    });
   };
+
   const [settingModalOpen, setSettingModalOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const handleResetSizing = () => {
@@ -913,7 +1054,7 @@ const PcFundTable = memo(function PcFundTable({
   const handleResetColumnVisibility = () => {
     const allVisible = {};
     NON_FROZEN_COLUMN_IDS.forEach((id) => {
-      allVisible[id] = true;
+      allVisible[id] = PC_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
     });
     setColumnVisibility(allVisible);
   };
@@ -1037,6 +1178,8 @@ const PcFundTable = memo(function PcFundTable({
   }, [stickyTop]);
 
   const relatedSectorEnabled = columnVisibility?.relatedSector !== false;
+  const dataSourceEnabled = columnVisibility?.dataSource !== false;
+  const dataSourceAccuracyLabels = useDataSourceAccuracyLabels(data, dataSourceEnabled);
   const relatedSectorCacheRef = useRef(new Map());
   const [relatedSectorByCode, setRelatedSectorByCode] = useState({});
   const [sectorQuoteByLabel, setSectorQuoteByLabel] = useState({});
@@ -1390,6 +1533,8 @@ const PcFundTable = memo(function PcFundTable({
             batchRemoveEnabled={batchRemoveEnabled}
             sortBy={sortBy}
             onToggleFavoriteRef={onToggleFavoriteRef}
+            onFundTagsClickRef={onFundTagsClickRef}
+            canEditFundTags={!!onFundTagsClick}
             fundExtraDataByCode={fundExtraDataByCode}
           />
         ),
@@ -1399,70 +1544,48 @@ const PcFundTable = memo(function PcFundTable({
         }
       },
       {
-        id: 'tags',
-        header: '基金标签',
-        size: 168,
-        minSize: 96,
+        id: 'dataSource',
+        header: '数据源',
+        size: 90,
+        minSize: 80,
         cell: (info) => {
           const original = info.row.original || {};
-          const list = isArray(original.fundTags) ? original.fundTags : [];
-          const hasTags = list.length > 0;
+          const autoSource = !!original.rawFund?.autoSource;
+          const dataSource = original.rawFund?.dataSource || 1;
+          const text = autoSource ? `自动源${dataSource}` : `数据源${dataSource}`;
+          const accuracyLabel = dataSourceAccuracyLabels?.[original.rawFund?.code || original.code];
           return (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation?.();
-                onFundTagsClickRef.current?.(original);
-              }}
-              title={onFundTagsClick ? '编辑标签' : undefined}
+            <div
               style={{
                 width: '100%',
-                minWidth: 0,
-                border: 'none',
-                background: 'transparent',
-                padding: '4px 0',
-                cursor: onFundTagsClick ? 'pointer' : 'default',
-                textAlign: 'left'
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: '4px'
               }}
-              disabled={!onFundTagsClick}
             >
-              {hasTags ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 4,
-                    justifyContent: 'flex-end'
-                  }}
-                >
-                  {list.map((raw, idx) => {
-                    const item =
-                      raw && isObject(raw) && raw.name != null
-                        ? {
-                            name: String(raw.name).trim(),
-                            theme: String(raw.theme ?? 'default').trim() || 'default'
-                          }
-                        : { name: String(raw).trim(), theme: 'default' };
-                    if (!item.name) return null;
-                    const { variant, className: themeCls } = getTagThemeBadgeProps(item.theme);
-                    return (
-                      <Badge key={`${item.name}-${idx}`} variant={variant} className={cn('font-normal', themeCls)}>
-                        {item.name}
-                      </Badge>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="muted" style={{ textAlign: 'right', fontSize: '12px' }}>
-                  —
-                </div>
-              )}
-            </button>
+              <Badge
+                variant="outline"
+                className={cn(
+                  'font-normal text-[11px] cursor-pointer hover:border-primary/50 transition-colors',
+                  autoSource ? 'border-primary/30 text-primary bg-primary/5' : 'text-muted-foreground border-border'
+                )}
+                style={autoSource ? { gap: '2px' } : {}}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useModalStore.setState({ dataSourceModal: { open: true, fund: original.rawFund } });
+                }}
+              >
+                {autoSource && <Sparkles size={10} style={{ opacity: 0.8 }} />}
+                {text}
+              </Badge>
+              <DataSourceAccuracyBadge label={accuracyLabel} />
+            </div>
           );
         },
         meta: {
-          align: 'right',
-          cellClassName: 'tags-cell'
+          align: 'center'
         }
       },
       {
@@ -2378,6 +2501,7 @@ const PcFundTable = memo(function PcFundTable({
       relatedSectorByCode,
       sectorQuoteByLabel,
       periodReturnsByCode,
+      dataSourceAccuracyLabels,
       batchRemoveEnabled,
       batchSelectableCount,
       selectedCount,
@@ -2410,14 +2534,16 @@ const PcFundTable = memo(function PcFundTable({
       });
     },
     state: {
-      columnSizing,
+      columnSizing: localColumnSizing,
       columnOrder,
       columnVisibility,
       columnPinning: {
         left: ['fundName', ...columnOrder.filter((id) => (currentGroupPc?.pcTableColumnPinned || []).includes(id))],
         right: ['actions']
-      }
+      },
+      pagination
     },
+    onPaginationChange: setPagination,
     onColumnOrderChange: (updater) => {
       setColumnOrder(updater);
     },
@@ -2431,6 +2557,8 @@ const PcFundTable = memo(function PcFundTable({
       }
     },
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    autoResetPageIndex: false,
     defaultColumn: {
       cell: (info) => info.getValue() ?? '—'
     }
@@ -2477,7 +2605,7 @@ const PcFundTable = memo(function PcFundTable({
     const isPinned = column.getIsPinned();
     const isNameColumn = column.id === 'fundName' || column.columnDef?.accessorKey === 'fundName';
     const style = {
-      width: `${column.getSize()}px`
+      width: `var(--col-${column.id}, ${column.getSize()}px)`
     };
     if (!isPinned) {
       return {
@@ -2492,8 +2620,8 @@ const PcFundTable = memo(function PcFundTable({
     return {
       ...style,
       position: 'sticky',
-      left: isLeft ? `${column.getStart('left')}px` : undefined,
-      right: isRight ? `${column.getAfter('right')}px` : undefined,
+      left: isLeft ? `var(--col-${column.id}-start, ${column.getStart('left')}px)` : undefined,
+      right: isRight ? `var(--col-${column.id}-after, ${column.getAfter('right')}px)` : undefined,
       zIndex: isHeader ? 11 : 10,
       backgroundColor: isHeader ? 'var(--table-pinned-header-bg)' : 'var(--row-bg, var(--bg))',
       boxShadow: 'none',
@@ -2609,11 +2737,25 @@ const PcFundTable = memo(function PcFundTable({
 
   const totalHeaderWidth = headerGroup?.headers?.reduce((acc, h) => acc + h.column.getSize(), 0) ?? 0;
 
+  const tableCssVariables = useMemo(() => {
+    const vars = {};
+    table.getAllLeafColumns().forEach((column) => {
+      vars[`--col-${column.id}`] = `${column.getSize()}px`;
+      vars[`--col-${column.id}-start`] = `${column.getStart('left')}px`;
+      vars[`--col-${column.id}-after`] = `${column.getAfter('right')}px`;
+    });
+    return vars;
+  }, [table.getState().columnSizing, table.getState().columnOrder, table.getState().columnPinning]);
+
   return (
     <EditModeContext.Provider value={{ isEditMode, selectedCodes, toggleSelected }}>
       <>
-        <div className="pc-fund-table" ref={tableContainerRef}>
-          <style>{`
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+          <div className="table-pc-wrap">
+            <div className="table-scroll-area">
+              <div className="table-scroll-area-inner">
+                <div className="pc-fund-table" ref={tableContainerRef} style={tableCssVariables}>
+                  <style>{`
         .table-row-scroll {
           --row-bg: var(--bg);
           background-color: var(--row-bg) !important;
@@ -2693,7 +2835,8 @@ const PcFundTable = memo(function PcFundTable({
           transition: opacity 0.2s, background-color 0.2s, box-shadow 0.2s;
         }
 
-        .resizer:hover::after {
+        .resizer:hover::after,
+        .resizer.isResizing::after {
           opacity: 1;
           background: var(--primary);
           box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2);
@@ -2720,243 +2863,355 @@ const PcFundTable = memo(function PcFundTable({
           width: 100%;
         }
       `}</style>
-          {/* 表头 */}
-          {renderTableHeader(false)}
+                  {/* 表头 */}
+                  {renderTableHeader(false)}
 
-          {/* 表体 */}
-          {enableVirtualization ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragCancel={handleDragCancel}
-              modifiers={[restrictToVerticalAxis]}
-              dropAnimation={null}
-              autoScroll={false}
-            >
-              <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
-                <div
-                  ref={virtualScrollAnchorRef}
-                  className="pc-fund-table-body-virtual"
-                  style={{ position: 'relative', width: '100%' }}
-                >
-                  <div
-                    style={{
-                      height: rowVirtualizer.getTotalSize(),
-                      position: 'relative',
-                      width: '100%'
-                    }}
-                  >
-                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                      const row = tableRows[virtualRow.index];
-                      if (!row) return null;
-                      return (
+                  {/* 表体 */}
+                  {enableVirtualization ? (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragStart={handleDragStart}
+                      onDragMove={handleDragMove}
+                      onDragEnd={handleDragEnd}
+                      onDragCancel={handleDragCancel}
+                      modifiers={[restrictToVerticalAxis]}
+                      dropAnimation={null}
+                      autoScroll={false}
+                    >
+                      <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
                         <div
-                          key={row.original.code || row.id}
-                          data-index={virtualRow.index}
-                          ref={rowVirtualizer.measureElement}
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
-                            zIndex: activeId === row.original.code ? 9999 : 1
-                          }}
+                          ref={virtualScrollAnchorRef}
+                          className="pc-fund-table-body-virtual"
+                          style={{ position: 'relative', width: '100%' }}
                         >
-                          <MemoizedTableRow
-                            row={row}
-                            index={virtualRow.index}
-                            sortBy={sortBy}
-                            enableAnimation={false}
-                            getCommonPinningStyles={getCommonPinningStyles}
-                            isFavorites={favorites?.has?.(row.original.code)}
-                            isSelected={selectedCodes?.has?.(row.original.code)}
-                            masked={masked}
-                            periodReturns={periodReturnsByCode[row.original.code]}
-                            relatedSector={relatedSectorByCode[row.original.code]}
-                            sectorQuote={
-                              relatedSectorByCode[row.original.code]
-                                ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
-                                : null
-                            }
-                            fundExtraData={fundExtraDataByCode[row.original.code]}
-                            columnOrder={columnOrder}
-                            columnVisibility={columnVisibility}
-                            columnSizing={columnSizing}
-                          />
+                          <div
+                            style={{
+                              height: rowVirtualizer.getTotalSize(),
+                              position: 'relative',
+                              width: '100%'
+                            }}
+                          >
+                            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                              const row = tableRows[virtualRow.index];
+                              if (!row) return null;
+                              return (
+                                <div
+                                  key={row.original.code || row.id}
+                                  data-index={virtualRow.index}
+                                  ref={rowVirtualizer.measureElement}
+                                  style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: 0,
+                                    width: '100%',
+                                    transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
+                                    zIndex: activeId === row.original.code ? 9999 : 1
+                                  }}
+                                >
+                                  <MemoizedTableRow
+                                    row={row}
+                                    index={virtualRow.index}
+                                    sortBy={sortBy}
+                                    enableAnimation={false}
+                                    getCommonPinningStyles={getCommonPinningStyles}
+                                    isFavorites={favorites?.has?.(row.original.code)}
+                                    isSelected={selectedCodes?.has?.(row.original.code)}
+                                    masked={masked}
+                                    periodReturns={periodReturnsByCode[row.original.code]}
+                                    relatedSector={relatedSectorByCode[row.original.code]}
+                                    sectorQuote={
+                                      relatedSectorByCode[row.original.code]
+                                        ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
+                                        : null
+                                    }
+                                    fundExtraData={fundExtraDataByCode[row.original.code]}
+                                    columnOrder={columnOrder}
+                                    columnVisibility={columnVisibility}
+                                    columnSizing={columnSizing}
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </SortableContext>
-            </DndContext>
-          ) : (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragCancel={handleDragCancel}
-              modifiers={[restrictToVerticalAxis]}
-              dropAnimation={null}
-              autoScroll={false}
-            >
-              <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
-                {enableRowAnimation ? (
-                  <AnimatePresence mode="popLayout">
-                    {tableRows.map((row, index) => (
-                      <MemoizedTableRow
-                        key={row.original.code || row.id}
-                        row={row}
-                        index={index}
-                        sortBy={sortBy}
-                        enableAnimation
-                        getCommonPinningStyles={getCommonPinningStyles}
-                        isFavorites={favorites?.has?.(row.original.code)}
-                        isSelected={selectedCodes?.has?.(row.original.code)}
-                        masked={masked}
-                        periodReturns={periodReturnsByCode[row.original.code]}
-                        relatedSector={relatedSectorByCode[row.original.code]}
-                        sectorQuote={
-                          relatedSectorByCode[row.original.code]
-                            ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
-                            : null
-                        }
-                        fundExtraData={fundExtraDataByCode[row.original.code]}
-                        columnOrder={columnOrder}
-                        columnVisibility={columnVisibility}
-                        columnSizing={columnSizing}
-                      />
-                    ))}
-                  </AnimatePresence>
-                ) : (
-                  <>
-                    {tableRows.map((row, index) => (
-                      <MemoizedTableRow
-                        key={row.original.code || row.id}
-                        row={row}
-                        index={index}
-                        sortBy={sortBy}
-                        enableAnimation={false}
-                        getCommonPinningStyles={getCommonPinningStyles}
-                        isFavorites={favorites?.has?.(row.original.code)}
-                        isSelected={selectedCodes?.has?.(row.original.code)}
-                        masked={masked}
-                        periodReturns={periodReturnsByCode[row.original.code]}
-                        relatedSector={relatedSectorByCode[row.original.code]}
-                        sectorQuote={
-                          relatedSectorByCode[row.original.code]
-                            ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
-                            : null
-                        }
-                        fundExtraData={fundExtraDataByCode[row.original.code]}
-                        columnOrder={columnOrder}
-                        columnVisibility={columnVisibility}
-                        columnSizing={columnSizing}
-                      />
-                    ))}
-                  </>
-                )}
-              </SortableContext>
-            </DndContext>
-          )}
+                      </SortableContext>
+                    </DndContext>
+                  ) : (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragStart={handleDragStart}
+                      onDragMove={handleDragMove}
+                      onDragEnd={handleDragEnd}
+                      onDragCancel={handleDragCancel}
+                      modifiers={[restrictToVerticalAxis]}
+                      dropAnimation={null}
+                      autoScroll={false}
+                    >
+                      <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
+                        {enableRowAnimation ? (
+                          <AnimatePresence mode="popLayout">
+                            {tableRows.map((row, index) => (
+                              <MemoizedTableRow
+                                key={row.original.code || row.id}
+                                row={row}
+                                index={index}
+                                sortBy={sortBy}
+                                enableAnimation
+                                getCommonPinningStyles={getCommonPinningStyles}
+                                isFavorites={favorites?.has?.(row.original.code)}
+                                isSelected={selectedCodes?.has?.(row.original.code)}
+                                masked={masked}
+                                periodReturns={periodReturnsByCode[row.original.code]}
+                                relatedSector={relatedSectorByCode[row.original.code]}
+                                sectorQuote={
+                                  relatedSectorByCode[row.original.code]
+                                    ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
+                                    : null
+                                }
+                                fundExtraData={fundExtraDataByCode[row.original.code]}
+                                columnOrder={columnOrder}
+                                columnVisibility={columnVisibility}
+                                columnSizing={columnSizing}
+                              />
+                            ))}
+                          </AnimatePresence>
+                        ) : (
+                          <>
+                            {tableRows.map((row, index) => (
+                              <MemoizedTableRow
+                                key={row.original.code || row.id}
+                                row={row}
+                                index={index}
+                                sortBy={sortBy}
+                                enableAnimation={false}
+                                getCommonPinningStyles={getCommonPinningStyles}
+                                isFavorites={favorites?.has?.(row.original.code)}
+                                isSelected={selectedCodes?.has?.(row.original.code)}
+                                masked={masked}
+                                periodReturns={periodReturnsByCode[row.original.code]}
+                                relatedSector={relatedSectorByCode[row.original.code]}
+                                sectorQuote={
+                                  relatedSectorByCode[row.original.code]
+                                    ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
+                                    : null
+                                }
+                                fundExtraData={fundExtraDataByCode[row.original.code]}
+                                columnOrder={columnOrder}
+                                columnVisibility={columnVisibility}
+                                columnSizing={columnSizing}
+                              />
+                            ))}
+                          </>
+                        )}
+                      </SortableContext>
+                    </DndContext>
+                  )}
 
-          {table.getRowModel().rows.length === 0 && (
-            <div className="table-row empty-row">
-              <div className="table-cell" style={{ textAlign: 'center' }}>
-                <span className="muted">暂无数据</span>
-              </div>
-            </div>
-          )}
-          {resetConfirmOpen && (
-            <ConfirmModal
-              title="重置列宽"
-              message="是否重置表格列宽为默认值？"
-              icon={<ResetIcon width="20" height="20" className="shrink-0 text-[var(--primary)]" />}
-              confirmVariant="primary"
-              onConfirm={handleResetSizing}
-              onCancel={() => setResetConfirmOpen(false)}
-              confirmText="重置"
-            />
-          )}
-          {showPortalHeader &&
-            ReactDOM.createPortal(
-              <div
-                className="pc-fund-table pc-fund-table-portal-header"
-                ref={portalHeaderRef}
-                style={{
-                  position: 'fixed',
-                  top: effectiveStickyTop,
-                  left: portalHorizontal.left,
-                  right: portalHorizontal.right,
-                  zIndex: 10,
-                  overflowX: 'auto',
-                  scrollbarWidth: 'none'
-                }}
-              >
-                <div
-                  className="table-header-row table-header-row-scroll"
-                  style={{ minWidth: totalHeaderWidth, width: 'fit-content' }}
-                >
-                  {headerGroup?.headers.map((header) => {
-                    const style = getCommonPinningStyles(header.column, true);
-                    const isNameColumn =
-                      header.column.id === 'fundName' || header.column.columnDef?.accessorKey === 'fundName';
-                    const isRightAligned = NON_FROZEN_COLUMN_IDS.includes(header.column.id);
-                    const align = isNameColumn ? '' : isRightAligned ? 'text-right' : 'text-center';
-                    const colId = header.column.id || header.column.columnDef?.accessorKey;
-                    const { sortKey, isSorted, isSortEnabled } = getSortHeaderMeta(colId);
-                    return (
+                  {table.getRowModel().rows.length === 0 && (
+                    <div className="table-row empty-row">
+                      <div className="table-cell" style={{ textAlign: 'center' }}>
+                        <span className="muted">暂无数据</span>
+                      </div>
+                    </div>
+                  )}
+                  {resetConfirmOpen && (
+                    <ConfirmModal
+                      title="重置列宽"
+                      message="是否重置表格列宽为默认值？"
+                      icon={<ResetIcon width="20" height="20" className="shrink-0 text-[var(--primary)]" />}
+                      confirmVariant="primary"
+                      onConfirm={handleResetSizing}
+                      onCancel={() => setResetConfirmOpen(false)}
+                      confirmText="重置"
+                    />
+                  )}
+                  {showPortalHeader &&
+                    ReactDOM.createPortal(
                       <div
-                        key={header.id}
-                        className={`table-header-cell ${align} ${isSortEnabled ? 'sortable' : ''}`}
+                        className="pc-fund-table pc-fund-table-portal-header"
+                        ref={portalHeaderRef}
                         style={{
-                          ...style,
-                          cursor: isSortEnabled ? 'pointer' : 'default',
-                          userSelect: isSortEnabled ? 'none' : 'auto'
-                        }}
-                        onClick={() => {
-                          if (isSortEnabled && onSortChange) {
-                            onSortChange(sortKey);
-                          }
+                          ...tableCssVariables,
+                          position: 'fixed',
+                          top: effectiveStickyTop,
+                          left: portalHorizontal.left,
+                          right: portalHorizontal.right,
+                          zIndex: 10,
+                          overflowX: 'auto',
+                          scrollbarWidth: 'none'
                         }}
                       >
                         <div
-                          style={{
-                            paddingRight: isRightAligned ? '20px' : '0',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4
-                          }}
+                          className="table-header-row table-header-row-scroll"
+                          style={{ minWidth: totalHeaderWidth, width: 'fit-content' }}
                         >
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(header.column.columnDef.header, header.getContext())}
-                          {isSortEnabled && (
-                            <span
-                              style={{
-                                display: 'inline-flex',
-                                flexDirection: 'column',
-                                lineHeight: 1,
-                                fontSize: '8px',
-                                opacity: isSorted ? 1 : 0.3
+                          {headerGroup?.headers.map((header) => {
+                            const style = getCommonPinningStyles(header.column, true);
+                            const isNameColumn =
+                              header.column.id === 'fundName' || header.column.columnDef?.accessorKey === 'fundName';
+                            const isRightAligned = NON_FROZEN_COLUMN_IDS.includes(header.column.id);
+                            const align = isNameColumn ? '' : isRightAligned ? 'text-right' : 'text-center';
+                            const colId = header.column.id || header.column.columnDef?.accessorKey;
+                            const { sortKey, isSorted, isSortEnabled } = getSortHeaderMeta(colId);
+                            return (
+                              <div
+                                key={header.id}
+                                className={`table-header-cell ${align} ${isSortEnabled ? 'sortable' : ''}`}
+                                style={{
+                                  ...style,
+                                  cursor: isSortEnabled ? 'pointer' : 'default',
+                                  userSelect: isSortEnabled ? 'none' : 'auto'
+                                }}
+                                onClick={() => {
+                                  if (isSortEnabled && onSortChange) {
+                                    onSortChange(sortKey);
+                                  }
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    paddingRight: isRightAligned ? '20px' : '0',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4
+                                  }}
+                                >
+                                  {header.isPlaceholder
+                                    ? null
+                                    : flexRender(header.column.columnDef.header, header.getContext())}
+                                  {isSortEnabled && (
+                                    <span
+                                      style={{
+                                        display: 'inline-flex',
+                                        flexDirection: 'column',
+                                        lineHeight: 1,
+                                        fontSize: '8px',
+                                        opacity: isSorted ? 1 : 0.3
+                                      }}
+                                    >
+                                      <span style={{ opacity: isSorted && sortOrder === 'asc' ? 1 : 0.3 }}>▲</span>
+                                      <span style={{ opacity: isSorted && sortOrder === 'desc' ? 1 : 0.3 }}>▼</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>,
+                      document.body
+                    )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {true && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 16px',
+                borderTop: '1px solid var(--border)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                <span className="muted" style={{ fontSize: '13px' }}>
+                  每页
+                </span>
+                <Input
+                  key={table.getState().pagination.pageSize}
+                  defaultValue={table.getState().pagination.pageSize}
+                  type="number"
+                  min={1}
+                  className="w-[60px] h-8 text-[16PX] text-center px-2"
+                  onBlur={(e) => {
+                    let val = parseInt(e.target.value, 10);
+                    if (isNaN(val) || val < 1) val = 20;
+                    e.target.value = val;
+                    if (val !== table.getState().pagination.pageSize) {
+                      table.setPageSize(val);
+                      if (typeof window !== 'undefined') {
+                        storageStore.setItem('fundTablePageSize', val);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+                <span className="muted" style={{ fontSize: '13px' }}>
+                  条
+                </span>
+              </div>
+              <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+                <Pagination className="mx-0 w-auto">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (table.getCanPreviousPage()) {
+                            table.previousPage();
+                            if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }
+                        }}
+                        className={!table.getCanPreviousPage() ? 'opacity-50 pointer-events-none' : ''}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: table.getPageCount() }, (_, i) => {
+                      const pageIndex = table.getState().pagination.pageIndex;
+                      if (i === 0 || i === table.getPageCount() - 1 || (i >= pageIndex - 1 && i <= pageIndex + 1)) {
+                        return (
+                          <PaginationItem key={i}>
+                            <PaginationLink
+                              href="#"
+                              isActive={pageIndex === i}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                table.setPageIndex(i);
+                                if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
                               }}
                             >
-                              <span style={{ opacity: isSorted && sortOrder === 'asc' ? 1 : 0.3 }}>▲</span>
-                              <span style={{ opacity: isSorted && sortOrder === 'desc' ? 1 : 0.3 }}>▼</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>,
-              document.body
-            )}
+                              {i + 1}
+                            </PaginationLink>
+                          </PaginationItem>
+                        );
+                      }
+                      if (i === pageIndex - 2 || i === pageIndex + 2) {
+                        return (
+                          <PaginationItem key={i}>
+                            <PaginationEllipsis />
+                          </PaginationItem>
+                        );
+                      }
+                      return null;
+                    })}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (table.getCanNextPage()) {
+                            table.nextPage();
+                            if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+                          }
+                        }}
+                        className={!table.getCanNextPage() ? 'opacity-50 pointer-events-none' : ''}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            </div>
+          )}
         </div>
         {!!(cardDialogRow && getFundCardProps) && (
           <FundDetailDialog
@@ -3009,12 +3264,29 @@ const PcFundTable = memo(function PcFundTable({
 });
 
 function FundDetailDialog({ blockDialogClose, cardDialogRow, getFundCardProps, setCardDialogRow }) {
+  const isAnySubModalOpen = useModalStore(
+    (s) =>
+      s.dataSourceModal.open ||
+      s.tradeModal.open ||
+      s.holdingModal.open ||
+      s.dcaModal.open ||
+      s.dividendMethodModal.open ||
+      s.convertModal.open ||
+      s.fundTagsEdit.open ||
+      s.historyModal.open ||
+      s.actionModal.open ||
+      s.selectHoldingGroupModal.open ||
+      s.addHistoryModal.open
+  );
+
+  const finalBlockClose = blockDialogClose || isAnySubModalOpen;
+
   return (
     <Dialog
       open
       onOpenChange={(open) => {
         if (!open && document.body.hasAttribute('data-photo-viewer-open')) return;
-        if (!open && !blockDialogClose) setCardDialogRow(null);
+        if (!open && !finalBlockClose) setCardDialogRow(null);
       }}
     >
       <DialogContent
@@ -3024,7 +3296,7 @@ function FundDetailDialog({ blockDialogClose, cardDialogRow, getFundCardProps, s
             e.preventDefault();
             return;
           }
-          if (blockDialogClose) e.preventDefault();
+          if (finalBlockClose) e.preventDefault();
         }}
         onEscapeKeyDown={(e) => {
           if (document.body.hasAttribute('data-photo-viewer-open')) {

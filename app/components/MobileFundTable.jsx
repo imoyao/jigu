@@ -16,12 +16,13 @@ import ReactDOM from 'react-dom';
 import { toast as sonnerToast } from 'sonner';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useModalStore } from '../stores';
-import { flexRender, getCoreRowModel, useReactTable } from '@tanstack/react-table';
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable } from '@tanstack/react-table';
 import { DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { isArray, isFunction, isObject, isString, throttle } from 'lodash';
+import { Sparkles } from 'lucide-react';
 import MobileFundCardDrawer from './MobileFundCardDrawer';
 import MobileSettingModal from './MobileSettingModal';
 import MoveGroupModal from './MoveGroupModal';
@@ -49,6 +50,18 @@ import { asyncPool } from '@/app/lib/asyncHelper';
 import { Badge } from '@/components/ui/badge';
 import { getTagThemeBadgeProps } from '@/app/components/AddTagDialog';
 import { cn } from '@/lib/utils';
+import DataSourceAccuracyBadge from './DataSourceAccuracyBadge';
+import { useDataSourceAccuracyLabels } from '@/app/hooks/useDataSourceAccuracyLabels';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious
+} from '@/components/ui/pagination';
+import { Input } from '@/components/ui/input';
 
 const EDIT_MOVE_TO_FRONT_COL = 'editMoveToFront';
 const EDIT_DRAG_COL = 'editDrag';
@@ -56,6 +69,7 @@ const EDIT_DRAG_COL = 'editDrag';
 const MOBILE_TAGS_COLUMN_ID = 'tags';
 
 const MOBILE_NON_FROZEN_COLUMN_IDS = [
+  'dataSource',
   'tags',
   'relatedSector',
   'yesterdayChangePercent',
@@ -79,6 +93,7 @@ const MOBILE_NON_FROZEN_COLUMN_IDS = [
 ];
 
 const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set([
+  'dataSource',
   'tags',
   'holdingCost',
   'costNav',
@@ -87,6 +102,7 @@ const MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED = new Set([
 ]);
 
 const MOBILE_COLUMN_HEADERS = {
+  dataSource: '数据源',
   relatedSector: '关联板块',
   period1w: '近1周',
   period1m: '近1月',
@@ -119,26 +135,6 @@ function sortableRowA11yProps(attributes) {
   if (!attributes) return {};
   const { tabIndex: _ignored, ...rest } = attributes;
   return { ...rest, tabIndex: -1 };
-}
-
-function beginDragScrollLock(scrollYRef, rafRef) {
-  scrollYRef.current = window.scrollY;
-  const tick = () => {
-    if (window.scrollY !== scrollYRef.current) {
-      window.scrollTo(0, scrollYRef.current);
-    }
-    rafRef.current = requestAnimationFrame(tick);
-  };
-  if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  rafRef.current = requestAnimationFrame(tick);
-}
-
-function endDragScrollLock(scrollYRef, rafRef) {
-  if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  rafRef.current = null;
-  if (window.scrollY !== scrollYRef.current) {
-    window.scrollTo(0, scrollYRef.current);
-  }
 }
 
 function EditDragHandleCell({ disabled }) {
@@ -542,6 +538,24 @@ const MobileFundTable = memo(function MobileFundTable({
   const fundDeleteBulkConfirm = useModalStore((s) => s.fundDeleteBulkConfirm);
   const blockDrawerClose = !!fundDeleteConfirm || !!fundDeleteBulkConfirm;
 
+  const [pagination, setPagination] = useState(() => {
+    let size = 20;
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = storageStore.getItem('fundTablePageSize');
+        if (stored && typeof stored === 'number' && stored > 0) size = stored;
+      }
+    } catch (e) {}
+    return {
+      pageIndex: 0,
+      pageSize: size
+    };
+  });
+
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+  }, [currentTab, sortBy, sortOrder]);
+
   const [isEditMode, setIsEditMode] = useState(false);
   const [editSelectedCodes, setEditSelectedCodes] = useState(() => new Set());
   const [moveGroupOpen, setMoveGroupOpen] = useState(false);
@@ -642,8 +656,7 @@ const MobileFundTable = memo(function MobileFundTable({
   );
 
   const ignoreNextDrawerCloseRef = useRef(false);
-  const dragScrollYRef = useRef(0);
-  const dragScrollRafRef = useRef(null);
+  const isTableDraggingRef = useRef(false);
 
   const onToggleFavoriteRef = useRef(onToggleFavorite);
   const onRemoveFundRef = useRef(onRemoveFund);
@@ -665,26 +678,6 @@ const MobileFundTable = memo(function MobileFundTable({
     onHoldingAmountClickRef.current = onHoldingAmountClick;
     onFundTagsClickRef.current = onFundTagsClick;
   }, [onToggleFavorite, onRemoveFund, onHoldingAmountClick, onFundTagsClick]);
-
-  const handleDragStart = () => {
-    beginDragScrollLock(dragScrollYRef, dragScrollRafRef);
-  };
-
-  const handleDragCancel = () => {
-    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
-  };
-
-  const handleDragEnd = (e) => {
-    const { active, over } = e;
-    if (active && over && active.id !== over.id && onReorder) {
-      const oldIndex = data.findIndex((item) => item.code === active.id);
-      const newIndex = data.findIndex((item) => item.code === over.id);
-      if (oldIndex !== -1 && newIndex !== -1) onReorder(oldIndex, newIndex);
-    }
-    endDragScrollLock(dragScrollYRef, dragScrollRafRef);
-  };
-
-  useEffect(() => () => endDragScrollLock(dragScrollYRef, dragScrollRafRef), []);
 
   const groupKey = currentTab ?? 'all';
   const currentGroupName = useMemo(() => {
@@ -783,7 +776,7 @@ const MobileFundTable = memo(function MobileFundTable({
   const defaultVisibility = (() => {
     const o = {};
     MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
-      o[id] = true;
+      o[id] = MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
     });
     return o;
   })();
@@ -808,6 +801,8 @@ const MobileFundTable = memo(function MobileFundTable({
     }
     return defaultVisibility;
   })();
+  const dataSourceEnabled = !isEditMode && mobileColumnVisibility?.dataSource !== false;
+  const dataSourceAccuracyLabels = useDataSourceAccuracyLabels(data, dataSourceEnabled);
 
   const persistMobileGroupConfig = (updates) => {
     if (typeof window === 'undefined') return;
@@ -1005,6 +1000,73 @@ const MobileFundTable = memo(function MobileFundTable({
       throttledVerticalUpdate.cancel();
     };
   }, [stickyTop]);
+
+  const autoScrollRafRef = useRef(null);
+
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRafRef.current) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+  }, []);
+
+  const startAutoScroll = useCallback((direction) => {
+    if (autoScrollRafRef.current) return;
+    const tick = () => {
+      window.scrollBy(0, direction * 12);
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(tick);
+  }, []);
+
+  const handleDragMove = useCallback(
+    (event) => {
+      const { active } = event;
+      const rect = active?.rect?.current?.translated;
+      if (!rect) return;
+
+      // effectiveStickyTop is the sticky offset. Header height is ~36px in MobileFundTable.
+      const headerBottom = effectiveStickyTop + 36;
+      const triggerTop = headerBottom + 40; // 40px trigger zone below the header
+      const triggerBottom = window.innerHeight - 40; // 40px trigger zone above the bottom
+
+      if (rect.top < triggerTop) {
+        startAutoScroll(-1);
+      } else if (rect.bottom > triggerBottom) {
+        startAutoScroll(1);
+      } else {
+        stopAutoScroll();
+      }
+    },
+    [effectiveStickyTop, startAutoScroll, stopAutoScroll]
+  );
+
+  const handleDragStart = useCallback(() => {
+    isTableDraggingRef.current = true;
+  }, []);
+
+  const handleDragCancel = useCallback(() => {
+    isTableDraggingRef.current = false;
+    stopAutoScroll();
+  }, [stopAutoScroll]);
+
+  const handleDragEnd = useCallback(
+    (e) => {
+      const { active, over } = e;
+      if (active && over && active.id !== over.id && onReorder) {
+        const oldIndex = data.findIndex((item) => item.code === active.id);
+        const newIndex = data.findIndex((item) => item.code === over.id);
+        if (oldIndex !== -1 && newIndex !== -1) onReorder(oldIndex, newIndex);
+      }
+      isTableDraggingRef.current = false;
+      stopAutoScroll();
+    },
+    [data, onReorder, stopAutoScroll]
+  );
+
+  useEffect(() => {
+    return () => stopAutoScroll();
+  }, [stopAutoScroll]);
 
   useEffect(() => {
     const tableEl = tableContainerRef.current;
@@ -1359,7 +1421,7 @@ const MobileFundTable = memo(function MobileFundTable({
   const handleResetMobileColumnVisibility = () => {
     const allVisible = {};
     MOBILE_NON_FROZEN_COLUMN_IDS.forEach((id) => {
-      allVisible[id] = true;
+      allVisible[id] = MOBILE_COLUMNS_DEFAULT_HIDDEN_IF_PERSONALIZED.has(id) ? false : true;
     });
     setMobileColumnVisibility(allVisible);
   };
@@ -1748,6 +1810,47 @@ const MobileFundTable = memo(function MobileFundTable({
           </div>
         ),
         meta: { align: 'center', cellClassName: 'mobile-edit-action-cell', width: columnWidthMap[EDIT_DRAG_COL] }
+      },
+      {
+        id: 'dataSource',
+        header: '数据源',
+        cell: (info) => {
+          const original = info.row.original || {};
+          const autoSource = !!original.rawFund?.autoSource;
+          const dataSource = original.rawFund?.dataSource || 1;
+          const text = autoSource ? `自动源${dataSource}` : `数据源${dataSource}`;
+          const accuracyLabel = dataSourceAccuracyLabels?.[original.rawFund?.code || original.code];
+          return (
+            <div
+              style={{
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-end',
+                alignItems: 'flex-end',
+                gap: '4px'
+              }}
+            >
+              <Badge
+                variant="outline"
+                className={cn(
+                  'font-normal text-[11px] cursor-pointer hover:border-primary/50 transition-colors',
+                  autoSource ? 'border-primary/30 text-primary bg-primary/5' : 'text-muted-foreground border-border'
+                )}
+                style={autoSource ? { gap: '2px' } : {}}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useModalStore.setState({ dataSourceModal: { open: true, fund: original.rawFund } });
+                }}
+              >
+                {autoSource && <Sparkles size={10} style={{ opacity: 0.8 }} />}
+                {text}
+              </Badge>
+              <DataSourceAccuracyBadge label={accuracyLabel} />
+            </div>
+          );
+        },
+        meta: { align: 'right', width: columnWidthMap.dataSource ?? 80 }
       },
       {
         id: 'tags',
@@ -2498,6 +2601,7 @@ const MobileFundTable = memo(function MobileFundTable({
       relatedSectorByCode,
       sectorQuoteByLabel,
       periodReturnsByCode,
+      dataSourceAccuracyLabels,
       isEditMode,
       editSelectedCodes,
       exitEditMode,
@@ -2537,8 +2641,11 @@ const MobileFundTable = memo(function MobileFundTable({
     getCoreRowModel: getCoreRowModel(),
     state: {
       columnOrder: tableColumnOrder,
-      columnVisibility: tableColumnVisibility
+      columnVisibility: tableColumnVisibility,
+      pagination
     },
+    onPaginationChange: setPagination,
+    getPaginationRowModel: getPaginationRowModel(),
     onColumnOrderChange: (updater) => {
       if (isEditMode) return;
       const next = isFunction(updater) ? updater(['fundName', ...mobileColumnOrder]) : updater;
@@ -2564,7 +2671,8 @@ const MobileFundTable = memo(function MobileFundTable({
     },
     defaultColumn: {
       cell: (info) => info.getValue() ?? '—'
-    }
+    },
+    autoResetPageIndex: false
   });
 
   const headerGroup = table.getHeaderGroups()[0];
@@ -2859,66 +2967,177 @@ const MobileFundTable = memo(function MobileFundTable({
     }
 
     return (
-      <div className="mobile-fund-table" ref={tableContainerRef}>
-        <div
-          className="mobile-fund-table-scroll"
-          style={mobileGridLayout.minWidth != null ? { minWidth: mobileGridLayout.minWidth } : undefined}
-        >
-          {renderTableHeader()}
+      <>
+        <div className="mobile-fund-table" ref={tableContainerRef}>
+          <div
+            className="mobile-fund-table-scroll"
+            style={mobileGridLayout.minWidth != null ? { minWidth: mobileGridLayout.minWidth } : undefined}
+          >
+            {renderTableHeader()}
 
-          {!onlyShowHeader && (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDragCancel={handleDragCancel}
-              modifiers={[restrictToVerticalAxis, restrictToParentElement]}
-              dropAnimation={null}
-              autoScroll={false}
-            >
-              <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
-                <AnimatePresence>
-                  {tableRows.map((row, index) => (
-                    <MemoizedMobileTableRow
-                      key={row.original.code || row.id}
-                      row={row}
-                      index={index}
-                      sortBy={sortBy}
-                      isEditMode={isEditMode}
-                      mobileGridLayout={mobileGridLayout}
-                      isFavorites={favorites?.has?.(row.original.code)}
-                      isSelected={editSelectedCodes?.has?.(row.original.code)}
-                      masked={masked}
-                      periodReturns={periodReturnsByCode[row.original.code]}
-                      relatedSector={relatedSectorByCode[row.original.code]}
-                      sectorQuote={
-                        relatedSectorByCode[row.original.code]
-                          ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
-                          : null
-                      }
-                      fundExtraData={fundExtraDataByCode[row.original.code]}
-                      tableColumnOrder={tableColumnOrder}
-                      tableColumnVisibility={tableColumnVisibility}
-                      getPinClass={getPinClass}
-                      getAlignClass={getAlignClass}
-                      LAST_COLUMN_EXTRA={LAST_COLUMN_EXTRA}
-                      editLongPressRef={editLongPressRef}
-                      clearEditLongPressTimer={clearEditLongPressTimer}
-                      setIsEditMode={setIsEditMode}
-                      setEditSelectedCodes={setEditSelectedCodes}
-                    />
-                  ))}
-                </AnimatePresence>
-              </SortableContext>
-            </DndContext>
+            {!onlyShowHeader && (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDragStart}
+                onDragMove={handleDragMove}
+                onDragEnd={handleDragEnd}
+                onDragCancel={handleDragCancel}
+                modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                dropAnimation={null}
+                autoScroll={false}
+              >
+                <SortableContext items={data.map((item) => item.code)} strategy={verticalListSortingStrategy}>
+                  <AnimatePresence>
+                    {tableRows.map((row, index) => (
+                      <MemoizedMobileTableRow
+                        key={row.original.code || row.id}
+                        row={row}
+                        index={index}
+                        sortBy={sortBy}
+                        isEditMode={isEditMode}
+                        mobileGridLayout={mobileGridLayout}
+                        isFavorites={favorites?.has?.(row.original.code)}
+                        isSelected={editSelectedCodes?.has?.(row.original.code)}
+                        masked={masked}
+                        periodReturns={periodReturnsByCode[row.original.code]}
+                        relatedSector={relatedSectorByCode[row.original.code]}
+                        sectorQuote={
+                          relatedSectorByCode[row.original.code]
+                            ? sectorQuoteByLabel[String(relatedSectorByCode[row.original.code]).trim()]
+                            : null
+                        }
+                        fundExtraData={fundExtraDataByCode[row.original.code]}
+                        tableColumnOrder={tableColumnOrder}
+                        tableColumnVisibility={tableColumnVisibility}
+                        getPinClass={getPinClass}
+                        getAlignClass={getAlignClass}
+                        LAST_COLUMN_EXTRA={LAST_COLUMN_EXTRA}
+                        editLongPressRef={editLongPressRef}
+                        clearEditLongPressTimer={clearEditLongPressTimer}
+                        setIsEditMode={setIsEditMode}
+                        setEditSelectedCodes={setEditSelectedCodes}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </SortableContext>
+              </DndContext>
+            )}
+          </div>
+
+          {table.getRowModel().rows.length === 0 && !onlyShowHeader && (
+            <div className="table-row empty-row">
+              <div className="table-cell" style={{ textAlign: 'center' }}>
+                <span className="muted">暂无数据</span>
+              </div>
+            </div>
           )}
         </div>
 
-        {table.getRowModel().rows.length === 0 && !onlyShowHeader && (
-          <div className="table-row empty-row">
-            <div className="table-cell" style={{ textAlign: 'center' }}>
-              <span className="muted">暂无数据</span>
+        {!onlyShowHeader && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '12px 16px',
+              borderTop: '1px solid var(--border)',
+              background: 'var(--bg)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+              <span className="muted" style={{ fontSize: '13px' }}>
+                每页
+              </span>
+              <Input
+                key={table.getState().pagination.pageSize}
+                defaultValue={table.getState().pagination.pageSize}
+                type="number"
+                min={1}
+                className="w-[60px] h-8 text-[16PX] text-center px-2"
+                onBlur={(e) => {
+                  let val = parseInt(e.target.value, 10);
+                  if (isNaN(val) || val < 1) val = 20;
+                  e.target.value = val;
+                  if (val !== table.getState().pagination.pageSize) {
+                    table.setPageSize(val);
+                    if (typeof window !== 'undefined') {
+                      storageStore.setItem('fundTablePageSize', val);
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+              <span className="muted" style={{ fontSize: '13px' }}>
+                条
+              </span>
+            </div>
+            <div
+              style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', overflowX: 'auto', paddingLeft: '8px' }}
+            >
+              <Pagination className="mx-0 w-auto flex-shrink-0">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (table.getCanPreviousPage()) {
+                          table.previousPage();
+                          if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                      }}
+                      className={!table.getCanPreviousPage() ? 'opacity-50 pointer-events-none' : ''}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: table.getPageCount() }, (_, i) => {
+                    const pageIndex = table.getState().pagination.pageIndex;
+                    if (i === 0 || i === table.getPageCount() - 1 || (i >= pageIndex - 1 && i <= pageIndex + 1)) {
+                      return (
+                        <PaginationItem key={i}>
+                          <PaginationLink
+                            href="#"
+                            isActive={pageIndex === i}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              table.setPageIndex(i);
+                              if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+                            }}
+                          >
+                            {i + 1}
+                          </PaginationLink>
+                        </PaginationItem>
+                      );
+                    }
+                    if (i === pageIndex - 2 || i === pageIndex + 2) {
+                      return (
+                        <PaginationItem key={i}>
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      );
+                    }
+                    return null;
+                  })}
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (table.getCanNextPage()) {
+                          table.nextPage();
+                          if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }
+                      }}
+                      className={!table.getCanNextPage() ? 'opacity-50 pointer-events-none' : ''}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
             </div>
           </div>
         )}
@@ -2987,7 +3206,7 @@ const MobileFundTable = memo(function MobileFundTable({
             }}
           />
         )}
-      </div>
+      </>
     );
   };
 
