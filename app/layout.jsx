@@ -22,7 +22,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        <meta name="apple-mobile-web-app-title" content="基估宝" />
+        <meta name="apple-mobile-web-app-title" content="叽咕" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <link rel="apple-touch-icon" href="/Icon-60@3x.png?v=1" />

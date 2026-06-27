@@ -15,7 +15,7 @@ Node >= 20.9.0 required. No test framework is configured.
 
 ## Architecture
 
-**real-time-fund** (基估宝) — a pure-JavaScript (JSX, no TypeScript) Next.js 16 App Router application that tracks real-time mutual fund valuations. Deploys as a static site to GitHub Pages (`output: 'export'` in next.config.js).
+**real-time-fund** (叽咕) — a pure-JavaScript (JSX, no TypeScript) Next.js 16 App Router application that tracks real-time mutual fund valuations. Deploys as a static site to GitHub Pages (`output: 'export'` in next.config.js).
 
 - `app/page.jsx` (~7400 lines) — monolithic SPA entry point: all application state (useState), business logic, and main layout in one file
 - `app/api/fund.js` — all external data fetching via JSONP/script tag injection (not fetch) to 天天基金, 东方财富, 腾讯财经

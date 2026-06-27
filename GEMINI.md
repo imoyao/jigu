@@ -1,4 +1,4 @@
-# Real-Time Fund Valuation (基估宝)
+# Real-Time Fund Valuation (叽咕)
 
 ## Project Overview
 
