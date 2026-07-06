@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { storageStore } from '../stores';
 
-const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.3.2';
+const ANNOUNCEMENT_KEY = 'hasClosedAnnouncement_v2.3.3';
 
 export default function Announcement() {
   const [isVisible, setIsVisible] = useState(false);
@@ -109,10 +109,9 @@ export default function Announcement() {
                 paddingRight: '4px'
               }}
             >
-              <p>v2.3.2 版本更新内容：</p>
-              <p>1. 新增数据源4（部分QDII）。</p>
-              <p>2. 新增表格分页。</p>
-              <p>3. 修复云端拉取排序个性化数据未生效问题。</p>
+              <p>v2.3.3 版本更新内容：</p>
+              <p>1. 优化净值更新判断。</p>
+              <p>2. 调整 T+2 类型基金当日收益计算方式。</p>
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
               <button

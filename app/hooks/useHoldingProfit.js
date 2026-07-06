@@ -1,8 +1,8 @@
 import { useCallback, useRef } from 'react';
 import { isArray, isNumber, isString } from 'lodash';
 import { useStorageStore } from '../stores';
-import { useTradingDay } from './useTradingDay';
 import { formatDate, toTz, isNavUpdated } from '../lib/fundHelpers';
+import { countTradingDaysBetween } from '../lib/tradingCalendar';
 
 /**
  * 基金持仓与当日/累计收益计算逻辑自定义 Hook
@@ -10,7 +10,6 @@ import { formatDate, toTz, isNavUpdated } from '../lib/fundHelpers';
  * @param {string | null} deps.activeGroupId - 当前活跃分组 ID
  */
 export function useHoldingProfit({ activeGroupId } = {}) {
-  const { isTradingDay } = useTradingDay();
   const todayStr = formatDate();
   const cacheRef = useRef(new Map());
 
@@ -20,10 +19,22 @@ export function useHoldingProfit({ activeGroupId } = {}) {
 
       const txScope = scopeGroupIdOverride !== undefined ? scopeGroupIdOverride : activeGroupId;
 
+      const confirmDays = Number(fund.confirmDays) || 1;
+      const isDelayedConfirmFund = Number.isFinite(confirmDays) && confirmDays >= 2;
       const hasExactTodayData = isString(fund.jzrq) && fund.jzrq === todayStr;
       const hasTodayData = isNavUpdated(fund.jzrq, todayStr, fund.confirmDays);
       const hasTodayValuation = isString(fund.gztime) && fund.gztime.startsWith(todayStr);
-      const canCalcTodayProfit = hasTodayData || hasTodayValuation;
+      const navTradingDayLag =
+        isDelayedConfirmFund && isString(fund.jzrq) && fund.jzrq
+          ? countTradingDaysBetween(fund.jzrq, todayStr, toTz)
+          : null;
+      const shouldUseConfirmedNav =
+        hasExactTodayData || (isDelayedConfirmFund ? hasTodayData && navTradingDayLag === 1 : hasTodayData);
+      // T+2 等延迟基金：净值日期只落后 1 个交易日时用确权净值；否则仅在今日估值存在时用估值。
+      const useValuation = hasTodayValuation && !shouldUseConfirmedNav;
+      const canCalcTodayProfit = shouldUseConfirmedNav || useValuation;
+      const profitBasisDate =
+        canCalcTodayProfit && !useValuation && isString(fund.jzrq) && fund.jzrq ? fund.jzrq : todayStr;
 
       // 分红与基本份额相关的计算缓存
       const currentStore = useStorageStore.getState();
@@ -41,6 +52,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
         cached.dividendMethod === holding.dividendMethod &&
         cached.txScope === txScope &&
         cached.todayStr === todayStr &&
+        cached.profitBasisDate === profitBasisDate &&
         cached.canCalcTodayProfit === canCalcTodayProfit;
 
       let extraShares = 0;
@@ -128,7 +140,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
           let sellToday = 0;
           const list = txs;
           for (const tx of list) {
-            if (!tx || tx.date !== todayStr) continue;
+            if (!tx || !tx.date || tx.date < profitBasisDate) continue;
             const gid = tx.groupId || null;
             if (txScope) {
               if (gid !== txScope) continue;
@@ -153,6 +165,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
           dividendMethod: holding.dividendMethod,
           txScope,
           todayStr,
+          profitBasisDate,
           canCalcTodayProfit,
           extraShares,
           dividendCash,
@@ -164,10 +177,6 @@ export function useHoldingProfit({ activeGroupId } = {}) {
       if (!holding.dividendMethod || holding.dividendMethod === 'reinvest') {
         effectiveShare += extraShares;
       }
-
-      // QDII 等基金净值日期会延迟，isNavUpdated 可能把近几日净值视为已更新。
-      // 当存在今天估值时，优先用今天估值计算当日收益，避免用延迟确认净值覆盖估算口径。
-      const useValuation = hasTodayValuation && !hasExactTodayData ? true : isTradingDay && !hasTodayData;
 
       let currentNav;
       let profitToday;
@@ -235,7 +244,7 @@ export function useHoldingProfit({ activeGroupId } = {}) {
         principalToday: isNumber(holding.cost) ? holding.cost * shareForTodayProfit : 0
       };
     },
-    [isTradingDay, todayStr, activeGroupId]
+    [todayStr, activeGroupId]
   );
 
   return { getHoldingProfit };

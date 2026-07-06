@@ -1981,6 +1981,16 @@ export default function HomePage() {
     scrollAreaRef.current.scrollBy({ left: 200, behavior: 'smooth' });
   };
 
+  const scrollTabsToLeftEnd = () => {
+    if (!scrollAreaRef.current) return;
+    scrollAreaRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+  };
+
+  const scrollTabsToRightEnd = () => {
+    if (!scrollAreaRef.current) return;
+    scrollAreaRef.current.scrollTo({ left: scrollAreaRef.current.scrollWidth, behavior: 'smooth' });
+  };
+
   const handleTabClick = (tabId) => {
     if (dragStateRef.current.hasDragged) return;
     startTransition(() => setCurrentTab(tabId));
@@ -4689,7 +4699,9 @@ export default function HomePage() {
                               transition={{ duration: 0.15 }}
                               className={`tabs-scroll-btn left ${!canLeft ? 'opacity-30 cursor-not-allowed' : ''}`}
                               disabled={!canLeft}
+                              title="单击向左滚动，双击滚动到最左端"
                               onClick={scrollTabsLeftBtn}
+                              onDoubleClick={scrollTabsToLeftEnd}
                             >
                               <ChevronLeft size={16} />
                             </motion.button>
@@ -4702,7 +4714,9 @@ export default function HomePage() {
                               transition={{ duration: 0.15 }}
                               className={`tabs-scroll-btn right ${!canRight ? 'opacity-30 cursor-not-allowed' : ''}`}
                               disabled={!canRight}
+                              title="单击向右滚动，双击滚动到最右端"
                               onClick={scrollTabsRightBtn}
+                              onDoubleClick={scrollTabsToRightEnd}
                             >
                               <ChevronRight size={16} />
                             </motion.button>
@@ -4749,35 +4763,26 @@ export default function HomePage() {
                             >
                               全部 ({funds.length})
                             </motion.button>
-                            {!showGroupDropdown && (
-                              <motion.button
-                                layout
-                                initial={{ opacity: 0, scale: 0.8 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.8 }}
-                                key="fav"
-                                className={`tab ${currentTab === 'fav' ? 'active' : ''}`}
-                                onClick={() => handleTabClick('fav')}
-                                transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                              >
-                                自选 ({favorites.size})
-                              </motion.button>
-                            )}
                             {!showGroupDropdown &&
-                              groups.map((g) => (
-                                <motion.button
-                                  layout
-                                  initial={{ opacity: 0, scale: 0.8 }}
-                                  animate={{ opacity: 1, scale: 1 }}
-                                  exit={{ opacity: 0, scale: 0.8 }}
-                                  key={g.id}
-                                  className={`tab ${currentTab === g.id ? 'active' : ''}`}
-                                  onClick={() => handleTabClick(g.id)}
-                                  transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
-                                >
-                                  {g.name} ({g.codes.length})
-                                </motion.button>
-                              ))}
+                              groups.map((g) => {
+                                const isFav = g.id === 'fav' || g.isPreset;
+                                const count = isFav ? favorites.size : g.codes?.length || 0;
+                                const label = isFav ? '自选' : g.name;
+                                return (
+                                  <motion.button
+                                    layout
+                                    initial={{ opacity: 0, scale: 0.8 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    exit={{ opacity: 0, scale: 0.8 }}
+                                    key={g.id}
+                                    className={`tab ${currentTab === g.id ? 'active' : ''}`}
+                                    onClick={() => handleTabClick(g.id)}
+                                    transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 1 }}
+                                  >
+                                    {label} ({count})
+                                  </motion.button>
+                                );
+                              })}
                             {showGroupDropdown && (
                               <div
                                 key="group-dropdown"
@@ -4814,12 +4819,16 @@ export default function HomePage() {
                                     }}
                                   >
                                     <SelectGroup>
-                                      <SelectItem value="fav">自选 ({favorites.size})</SelectItem>
-                                      {groups.map((g) => (
-                                        <SelectItem key={g.id} value={g.id}>
-                                          {g.name} ({g.codes.length})
-                                        </SelectItem>
-                                      ))}
+                                      {groups.map((g) => {
+                                        const isFav = g.id === 'fav' || g.isPreset;
+                                        const count = isFav ? favorites.size : g.codes?.length || 0;
+                                        const label = isFav ? '自选' : g.name;
+                                        return (
+                                          <SelectItem key={g.id} value={g.id}>
+                                            {label} ({count})
+                                          </SelectItem>
+                                        );
+                                      })}
                                     </SelectGroup>
                                   </SelectContent>
                                 </Select>
