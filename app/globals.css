@@ -463,9 +463,11 @@ body::before {
   color: var(--muted);
 }
 
-[data-theme='light'] .tab:hover {
-  color: var(--primary);
-  background: rgba(8, 145, 178, 0.1);
+@media (min-width: 641px) and (hover: hover) {
+  [data-theme='light'] .tab:hover {
+    color: var(--primary);
+    background: rgba(8, 145, 178, 0.1);
+  }
 }
 
 [data-theme='light'] .tab.active {
@@ -2216,9 +2218,11 @@ html::-webkit-scrollbar-thumb:active,
   align-items: center;
 }
 
-.tab:hover {
-  color: var(--primary);
-  background: rgba(34, 211, 238, 0.08);
+@media (min-width: 641px) and (hover: hover) {
+  .tab:hover {
+    color: var(--primary);
+    background: rgba(34, 211, 238, 0.08);
+  }
 }
 
 .tab.active {
@@ -2227,8 +2231,9 @@ html::-webkit-scrollbar-thumb:active,
   box-shadow: none;
 }
 
-@media (hover: none) {
-  .tab:hover {
+@media (hover: none), (max-width: 640px) {
+  .tab:hover,
+  [data-theme='light'] .tab:hover {
     color: var(--muted);
     background: transparent;
   }
@@ -2237,6 +2242,11 @@ html::-webkit-scrollbar-thumb:active,
     background: rgba(34, 211, 238, 0.15);
     color: var(--primary);
     box-shadow: none;
+  }
+  [data-theme='light'] .tab.active,
+  [data-theme='light'] .tab.active:hover {
+    background: rgba(8, 145, 178, 0.15);
+    color: var(--primary);
   }
 }
 
