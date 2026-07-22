@@ -27,9 +27,9 @@
 
 <a href="https://www.star-history.com/?repos=hzm0321%2Freal-time-fund&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=hzm0321/real-time-fund&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=hzm0321/real-time-fund&type=date&theme=dark&legend=top-left&sealed_token=uqcuaLvgb3Aq07R3KcrXIc_PUJ4IWyDLbNFrAREdVyaDQbln1bhfGGTJKYc8MAZBTS-c1BsyGO8Vyl9FduEa32KDI_dmFw8j4UaArC7ROA4g5MMR087plPKENee8zZQDDQ_YFnFGbairNxciy_MdnPK3mxtO5OIQ6TTzBmTawwiMDx7Kyt_cgCc6xvUH" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=hzm0321/real-time-fund&type=date&legend=top-left&sealed_token=uqcuaLvgb3Aq07R3KcrXIc_PUJ4IWyDLbNFrAREdVyaDQbln1bhfGGTJKYc8MAZBTS-c1BsyGO8Vyl9FduEa32KDI_dmFw8j4UaArC7ROA4g5MMR087plPKENee8zZQDDQ_YFnFGbairNxciy_MdnPK3mxtO5OIQ6TTzBmTawwiMDx7Kyt_cgCc6xvUH" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=hzm0321/real-time-fund&type=date&legend=top-left&sealed_token=uqcuaLvgb3Aq07R3KcrXIc_PUJ4IWyDLbNFrAREdVyaDQbln1bhfGGTJKYc8MAZBTS-c1BsyGO8Vyl9FduEa32KDI_dmFw8j4UaArC7ROA4g5MMR087plPKENee8zZQDDQ_YFnFGbairNxciy_MdnPK3mxtO5OIQ6TTzBmTawwiMDx7Kyt_cgCc6xvUH" />
  </picture>
 </a>
 
