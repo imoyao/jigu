@@ -112,7 +112,9 @@ export default function LoginModal({ onClose, showToast, isExplicitLoginRef, ini
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'github',
         options: {
-          redirectTo: window.location.origin
+          // 跳回 jigu 首页；session 落到 .duoduobei.com 父域 cookie，
+          // 跨站访问 app 时浏览器自动带上，实现免登（反之亦然）。
+          redirectTo: `${window.location.origin}/`
         }
       });
       if (error) throw error;
