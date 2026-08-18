@@ -1,11 +1,12 @@
 'use client';
 
 import { motion } from 'framer-motion';
-import Image from 'next/image';
 import { AlertTriangle } from 'lucide-react';
 import { CloseIcon } from './Icons';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import weChatGroupImg from '../assets/weChatGroup.jpg';
+
+// 微信用户支持群活码（动态二维码），扫/点此链接进入微信入群页
+const WECHAT_GROUP_QR_URL = 'https://open.weixin.qq.com/qr/code?username=idealyard';
 
 export default function WeChatModal({ onClose }) {
   return (
@@ -40,17 +41,37 @@ export default function WeChatModal({ onClose }) {
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>入群须知：禁止讨论和基金买卖以及投资的有关内容，可反馈软件相关需求。</AlertDescription>
         </Alert>
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <Image
-            src={weChatGroupImg}
-            alt="WeChat Group"
-            sizes="(max-width: 360px) 100vw, 360px"
-            style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
-          />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          <a
+            href={WECHAT_GROUP_QR_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+              width: '100%',
+              padding: '24px 16px',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+              textDecoration: 'none',
+              color: 'var(--primary)',
+              background: 'var(--card)',
+              fontSize: '15px',
+              fontWeight: 600
+            }}
+          >
+            <span style={{ fontSize: '28px' }}>💬</span>
+            点击打开微信入群二维码
+          </a>
+          <p className="muted" style={{ textAlign: 'center', fontSize: '13px', lineHeight: '1.6' }}>
+            在微信中打开上方链接，长按或扫描页面二维码即可加入群聊，
+            <br />
+            获取最新更新与交流
+          </p>
         </div>
-        <p className="muted" style={{ textAlign: 'center', marginTop: 16, fontSize: '14px' }}>
-          扫码加入群聊，获取最新更新与交流
-        </p>
       </motion.div>
     </motion.div>
   );
